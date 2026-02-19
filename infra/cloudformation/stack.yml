@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CloudFormation template to create an S3 bucket for the pipeline and an IAM role
+  with permissions to access the bucket. Use `aws cloudformation deploy` to create.
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: S3 bucket to store pipeline data
+  Environment:
+    Type: String
+    Default: dev
+
+Resources:
+  PipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'pipeline-role-${Environment}-${AWS::AccountId}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::${BucketName}'
+                  - !Sub 'arn:aws:s3:::${BucketName}/*'
+
+Outputs:
+  BucketName:
+    Description: Created S3 bucket name
+    Value: !Ref BucketName
+  PipelineRoleArn:
+    Description: IAM role ARN for pipeline services
+    Value: !GetAtt PipelineRole.Arn

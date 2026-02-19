@@ -1,0 +1,10 @@
+# Pipeline configuration (defaults). Can be overridden with environment variables.
+# - S3_BUCKET: name of the S3 bucket
+# - AWS_REGION: AWS region
+# - SKIP_S3_UPLOAD: if true, local runs won't attempt S3 uploads
+# - ASSUME_ROLE_ARN: optional role ARN to assume for S3 access
+
+s3_bucket: my-bucket
+aws_region: us-east-1
+skip_s3_upload: true
+assume_role_arn: null
