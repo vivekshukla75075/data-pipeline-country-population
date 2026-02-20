@@ -1,0 +1,101 @@
+name: Build and Deploy to AWS
+
+on:
+  push:
+    branches:
+      - feature/sync-upstream-changes
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+env:
+  AWS_REGION: us-east-1
+  S3_BUCKET: data-pipeline-bucket
+  IAM_ROLE_NAME: spark-validation-role
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov boto3
+
+      - name: Run linting
+        run: |
+          pip install flake8
+          flake8 Validation/validate_schema.py --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Run unit tests
+        run: |
+          pytest Validation/test_validate_schema.py -v --cov=Validation --cov-report=xml
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.xml
+          flags: unittests
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feature/sync-upstream-changes'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 pyspark
+
+      - name: Setup AWS Infrastructure
+        run: |
+          python Validation/validate_schema.py --setup-aws --bucket-name ${{ env.S3_BUCKET }} --role-name ${{ env.IAM_ROLE_NAME }}
+
+      - name: Deploy validation script to S3
+        run: |
+          aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/
+          aws s3 cp infra/iam/s3_access_policy.json s3://${{ env.S3_BUCKET }}/policies/
+
+      - name: Trigger Spark validation job
+        run: |
+          python Validation/validate_schema.py --bucket-name ${{ env.S3_BUCKET }}
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "✅ Deployment to AWS successful!"
+          echo "Bucket: ${{ env.S3_BUCKET }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+
+      - name: Notify deployment failure
+        if: failure()
+        run: |
+          echo "❌ Deployment failed!"
+          exit 1
