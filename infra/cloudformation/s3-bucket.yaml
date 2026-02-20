@@ -4,7 +4,7 @@ Description: 'CloudFormation template to create S3 bucket for data pipeline'
 Parameters:
   BucketName:
     Type: String
-    Default: data-pipeline-bucket
+    Default: data-pipeline-country-population
     Description: Name of the S3 bucket to create
   Environment:
     Type: String
