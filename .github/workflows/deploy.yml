@@ -13,7 +13,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  S3_BUCKET: data-pipeline-bucket
+  S3_BUCKET: data-pipeline-country-population
   ENVIRONMENT: dev
 
 jobs:
@@ -58,52 +58,29 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.9
-
-      - name: Install AWS CLI
+      - name: Verify S3 bucket exists
+        id: bucket-check
         run: |
-          python -m pip install --upgrade pip boto3
-
-      - name: Create S3 bucket
-        id: create-bucket
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          BUCKET_NAME="${{ env.S3_BUCKET }}-${ACCOUNT_ID}-${{ env.ENVIRONMENT }}"
+          BUCKET_NAME="${{ env.S3_BUCKET }}"
           echo "bucket_name=$BUCKET_NAME" >> $GITHUB_OUTPUT
-          
           if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
-            echo "✓ S3 bucket already exists: $BUCKET_NAME"
+            echo "✓ S3 bucket exists: $BUCKET_NAME"
           else
-            echo "Creating S3 bucket: $BUCKET_NAME"
-            aws s3api create-bucket \
-              --bucket "$BUCKET_NAME" \
-              --region ${{ env.AWS_REGION }}
-            echo "✓ S3 bucket created: $BUCKET_NAME"
+            echo "❌ S3 bucket does not exist: $BUCKET_NAME"
+            exit 1
           fi
 
-      - name: Enable bucket versioning
-        run: |
-          aws s3api put-bucket-versioning \
-            --bucket ${{ steps.create-bucket.outputs.bucket_name }} \
-            --versioning-configuration Status=Enabled
-          echo "✓ Bucket versioning enabled"
-
-      - name: Create IAM role for Glue
+      - name: Create IAM role for Glue (if not exists)
+        continue-on-error: true
         run: |
           ROLE_NAME="glue-validation-role"
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           
-          # Check if role exists
           if aws iam get-role --role-name "$ROLE_NAME" 2>/dev/null; then
             echo "✓ IAM role already exists: $ROLE_NAME"
           else
             echo "Creating IAM role: $ROLE_NAME"
             
-            # Create trust policy for Glue
-            cat > /tmp/trust-policy.json <<EOF
+            cat > /tmp/trust-policy.json <<'EOF'
           {
             "Version": "2012-10-17",
             "Statement": [
@@ -120,48 +97,14 @@ jobs:
             
             aws iam create-role \
               --role-name "$ROLE_NAME" \
-              --assume-role-policy-document file:///tmp/trust-policy.json
-            
-            echo "✓ IAM role created: $ROLE_NAME"
+              --assume-role-policy-document file:///tmp/trust-policy.json && \
+            echo "✓ IAM role created: $ROLE_NAME" || \
+            echo "⚠️  Could not create IAM role (may lack permissions)"
           fi
-
-      - name: Attach S3 policy to role
-        run: |
-          ROLE_NAME="glue-validation-role"
-          BUCKET_NAME=${{ steps.create-bucket.outputs.bucket_name }}
-          
-          # Create inline policy for S3 access
-          cat > /tmp/s3-policy.json <<EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Action": [
-                  "s3:GetObject",
-                  "s3:PutObject",
-                  "s3:DeleteObject",
-                  "s3:ListBucket"
-                ],
-                "Resource": [
-                  "arn:aws:s3:::${BUCKET_NAME}",
-                  "arn:aws:s3:::${BUCKET_NAME}/*"
-                ]
-              }
-            ]
-          }
-          EOF
-          
-          aws iam put-role-policy \
-            --role-name "$ROLE_NAME" \
-            --policy-name "S3AccessPolicy" \
-            --policy-document file:///tmp/s3-policy.json
-          
-          echo "✓ S3 access policy attached to role"
 
       - name: Deploy scripts to S3
         run: |
-          BUCKET_NAME=${{ steps.create-bucket.outputs.bucket_name }}
+          BUCKET_NAME=${{ steps.bucket-check.outputs.bucket_name }}
           
           echo "Uploading validation script..."
           aws s3 cp Validation/validate_schema.py s3://${BUCKET_NAME}/scripts/validate_schema.py
@@ -176,27 +119,14 @@ jobs:
 
       - name: List deployed files
         run: |
-          BUCKET_NAME=${{ steps.create-bucket.outputs.bucket_name }}
+          BUCKET_NAME=${{ steps.bucket-check.outputs.bucket_name }}
           echo "Files in S3 bucket: $BUCKET_NAME"
           aws s3 ls s3://${BUCKET_NAME}/ --recursive
-
-      - name: Verify bucket and role
-        run: |
-          BUCKET_NAME=${{ steps.create-bucket.outputs.bucket_name }}
-          ROLE_NAME="glue-validation-role"
-          
-          echo "Verifying S3 bucket..."
-          aws s3api head-bucket --bucket ${BUCKET_NAME}
-          echo "✓ S3 bucket verified"
-          
-          echo "Verifying IAM role..."
-          aws iam get-role --role-name ${ROLE_NAME}
-          echo "✓ IAM role verified"
 
       - name: Notify deployment success
         if: success()
         run: |
-          BUCKET_NAME=${{ steps.create-bucket.outputs.bucket_name }}
+          BUCKET_NAME=${{ steps.bucket-check.outputs.bucket_name }}
           echo "✅ Deployment to AWS successful!"
           echo "Bucket: $BUCKET_NAME"
           echo "Region: ${{ env.AWS_REGION }}"

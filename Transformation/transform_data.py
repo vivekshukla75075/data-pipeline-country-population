@@ -13,7 +13,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def run_transformation(bucket_name="data-pipeline-bucket", validated_path="validated/countries/", curated_path="curated/countries/"):
+def run_transformation(bucket_name="data-pipeline-country-population", validated_path="validated/countries/", curated_path="curated/countries/"):
 	"""Run transformation job on AWS Glue using PySpark."""
 	try:
 		from awsglue.context import GlueContext
@@ -56,7 +56,7 @@ def run_transformation(bucket_name="data-pipeline-bucket", validated_path="valid
 		logger.exception("Transformation job failed")
 		raise
 
-def run_transformation_spark(bucket_name="data-pipeline-bucket", validated_path="validated/countries/", curated_path="curated/countries/"):
+def run_transformation_spark(bucket_name="data-pipeline-country-population", validated_path="validated/countries/", curated_path="curated/countries/"):
 	"""Fallback transformation using standard PySpark (for local testing)."""
 	from pyspark.sql import SparkSession
 	from pyspark.sql.functions import col
@@ -95,7 +95,7 @@ def main():
 	args = parser.parse_args()
 
 	import os
-	bucket_name = args.bucket_name or os.environ.get("S3_BUCKET", "data-pipeline-bucket")
+	bucket_name = args.bucket_name or os.environ.get("S3_BUCKET", "data-pipeline-country-population")
 	
 	logger.info("Using S3 bucket: %s", bucket_name)
 	logger.info("Running transformation job...")

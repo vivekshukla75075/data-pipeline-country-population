@@ -53,7 +53,7 @@ def upload_file_to_s3(local_path, bucket_name, s3_key):
 		logger.warning("Could not upload %s to S3: %s", local_path, str(e))
 		return False
 
-def setup_aws_infrastructure(bucket_name="data-pipeline-bucket", role_name="glue-validation-role"):
+def setup_aws_infrastructure(bucket_name="data-pipeline-country-population", role_name="glue-validation-role"):
 	"""Create S3 bucket and IAM role with necessary policies for Glue jobs."""
 	import boto3
 	
@@ -122,7 +122,7 @@ def setup_aws_infrastructure(bucket_name="data-pipeline-bucket", role_name="glue
 	except Exception as e:
 		logger.warning("Could not attach S3 policy: %s. Error: %s", role_name, str(e))
 
-def run_validation(bucket_name="data-pipeline-bucket", raw_path="raw/countries/countries_raw.json", validated_path="validated/countries/"):
+def run_validation(bucket_name="data-pipeline-country-population", raw_path="raw/countries/countries_raw.json", validated_path="validated/countries/"):
 	"""Run validation job on AWS Glue using PySpark."""
 	try:
 		from awsglue.context import GlueContext
@@ -189,14 +189,14 @@ def run_validation_spark(bucket_name="data-pipeline-bucket", raw_path="raw/count
 def main():
 	parser = argparse.ArgumentParser(description="AWS Glue validation job for country population data")
 	parser.add_argument("--setup-aws", action="store_true", help="Create AWS S3 bucket and IAM role before running validation")
-	parser.add_argument("--bucket-name", default=None, help="AWS S3 bucket name (default: data-pipeline-bucket)")
+	parser.add_argument("--bucket-name", default=None, help="AWS S3 bucket name (default: data-pipeline-country-population)")
 	parser.add_argument("--role-name", default="glue-validation-role", help="IAM role name (default: glue-validation-role)")
 	parser.add_argument("--raw-path", default="raw/countries/countries_raw.json", help="S3 path to raw JSON file")
 	parser.add_argument("--validated-path", default="validated/countries/", help="S3 path for validated parquet output")
 	args = parser.parse_args()
 
 	# Use environment variable or command-line argument for bucket name
-	bucket_name = args.bucket_name or os.environ.get("S3_BUCKET", "data-pipeline-bucket")
+	bucket_name = args.bucket_name or os.environ.get("S3_BUCKET", "data-pipeline-country-population")
 	role_name = args.role_name
 	
 	logger.info("Using S3 bucket: %s", bucket_name)
