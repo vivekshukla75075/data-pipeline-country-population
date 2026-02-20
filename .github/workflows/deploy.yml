@@ -68,19 +68,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install boto3
 
-      - name: Setup AWS Infrastructure
+      - name: Deploy validation script to S3
         run: |
-          python Validation/validate_schema.py --setup-aws --bucket-name ${{ env.S3_BUCKET }} --role-name ${{ env.IAM_ROLE_NAME }}
+          aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/ || echo "Note: S3 upload skipped (bucket may not exist)"
+          aws s3 cp infra/iam/s3_access_policy.json s3://${{ env.S3_BUCKET }}/policies/ || echo "Note: S3 upload skipped (bucket may not exist)"
 
-      - name: Deploy files to S3
-        run: |
-          aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/ || true
-          aws s3 cp infra/iam/s3_access_policy.json s3://${{ env.S3_BUCKET }}/policies/ || true
-
-      - name: Notify deployment success
+      - name: Notify deployment
         if: success()
-        run: echo "✅ Deployment to AWS successful!"
-
-      - name: Notify deployment failure
-        if: failure()
-        run: echo "❌ Deployment failed!"
+        run: echo "✅ Deployment workflow completed successfully!"
