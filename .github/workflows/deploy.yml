@@ -41,7 +41,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest Validation/test_validate_schema.py -v --tb=short
+          cd Validation && pytest test_validate_schema.py -v --tb=short
 
   deploy:
     needs: build

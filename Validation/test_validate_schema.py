@@ -2,6 +2,11 @@
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 class TestSetupAwsInfrastructure:
@@ -12,7 +17,7 @@ class TestSetupAwsInfrastructure:
 		mock_iam = Mock()
 		mock_boto_client.side_effect = lambda service: mock_s3 if service == "s3" else mock_iam
 		
-		from Validation.validate_schema import setup_aws_infrastructure
+		from validate_schema import setup_aws_infrastructure
 		setup_aws_infrastructure("test-bucket", "test-role")
 		
 		mock_s3.create_bucket.assert_called_once_with(Bucket="test-bucket")
@@ -26,14 +31,14 @@ class TestSetupAwsInfrastructure:
 		mock_boto_client.side_effect = lambda service: mock_s3 if service == "s3" else mock_iam
 		mock_s3.create_bucket.side_effect = mock_s3.exceptions.BucketAlreadyOwnedByYou()
 		
-		from Validation.validate_schema import setup_aws_infrastructure
+		from validate_schema import setup_aws_infrastructure
 		setup_aws_infrastructure("test-bucket", "test-role")
 		
 		mock_iam.create_role.assert_called_once()
 
 
 class TestRunValidation:
-	@patch("Validation.validate_schema.SparkSession")
+	@patch("validate_schema.SparkSession")
 	def test_validation_filters_records(self, mock_spark_session):
 		"""Test that validation filters records with population > 0."""
 		mock_spark = Mock()
@@ -44,13 +49,13 @@ class TestRunValidation:
 		mock_spark.read.json.return_value = mock_df
 		mock_spark_session.builder.appName.return_value.getOrCreate.return_value = mock_spark
 		
-		from Validation.validate_schema import run_validation
+		from validate_schema import run_validation
 		result = run_validation("test-bucket")
 		
 		assert result == 10
 		mock_df.filter.assert_called_once()
 
-	@patch("Validation.validate_schema.SparkSession")
+	@patch("validate_schema.SparkSession")
 	def test_validation_writes_parquet(self, mock_spark_session):
 		"""Test that validation writes output to S3."""
 		mock_spark = Mock()
@@ -64,7 +69,7 @@ class TestRunValidation:
 		mock_spark.read.json.return_value = mock_df
 		mock_spark_session.builder.appName.return_value.getOrCreate.return_value = mock_spark
 		
-		from Validation.validate_schema import run_validation
+		from validate_schema import run_validation
 		run_validation("test-bucket")
 		
 		mock_write.mode.assert_called_with("overwrite")
