@@ -38,7 +38,7 @@ class TestSetupAwsInfrastructure:
 
 
 class TestRunValidation:
-	@patch("validate_schema.SparkSession")
+	@patch("pyspark.sql.SparkSession")
 	def test_validation_filters_records(self, mock_spark_session):
 		"""Test that validation filters records with population > 0."""
 		mock_spark = Mock()
@@ -55,7 +55,7 @@ class TestRunValidation:
 		assert result == 10
 		mock_df.filter.assert_called_once()
 
-	@patch("validate_schema.SparkSession")
+	@patch("pyspark.sql.SparkSession")
 	def test_validation_writes_parquet(self, mock_spark_session):
 		"""Test that validation writes output to S3."""
 		mock_spark = Mock()
