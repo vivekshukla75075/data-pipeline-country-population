@@ -1,103 +1,106 @@
-"""Transformation: read validated data and produce curated parquet.
+"""Transformation: read validated data and produce curated parquet using AWS Glue.
 
 Description:
-- Reads validated parquet (S3 or local), flattens fields, and writes curated parquet
-- Local mode uses pandas/pyarrow and writes partitioned parquet into `output/curated/`
+- Reads validated parquet from S3 using AWS Glue
+- Flattens fields and writes curated parquet partitioned by region
+- Designed to run as AWS Glue PySpark job
 
 Logs info and errors using the standard Python `logging` module.
 """
 
 import argparse
-import os
-import shutil
 import logging
 
+logger = logging.getLogger(__name__)
 
-def run_local():
-    import pandas as pd
-    logger = logging.getLogger(__name__)
+def run_transformation(bucket_name="data-pipeline-bucket", validated_path="validated/countries/", curated_path="curated/countries/"):
+	"""Run transformation job on AWS Glue using PySpark."""
+	try:
+		from awsglue.context import GlueContext
+		from awsglue.job import Job
+		from pyspark.context import SparkContext
+		from pyspark.sql.functions import col
+		
+		# Initialize Glue context
+		sc = SparkContext()
+		glue_context = GlueContext(sc)
+		spark = glue_context.spark_session
+		job = Job(glue_context)
+		
+		validated_s3_path = f"s3://{bucket_name}/{validated_path}"
+		curated_s3_path = f"s3://{bucket_name}/{curated_path}"
+		
+		logger.info("Reading validated data from %s", validated_s3_path)
+		validated_df = spark.read.parquet(validated_s3_path)
+		
+		logger.info("Transforming data (flattening and selecting columns)")
+		# ...existing code...
+		transformed_df = validated_df.select(
+			col("name.common").alias("country_name"),
+			col("region"),
+			col("population"),
+			col("currencies").alias("currency_name")
+		)
+		
+		logger.info("Writing curated data to %s partitioned by region", curated_s3_path)
+		transformed_df.write.mode("overwrite").partitionBy("region").parquet(curated_s3_path)
+		
+		logger.info("Transformation completed successfully")
+		job.commit()
+		
+		return transformed_df.count()
+	except ImportError:
+		logger.info("AWS Glue libraries not available. Using standard PySpark instead.")
+		return run_transformation_spark(bucket_name, validated_path, curated_path)
+	except Exception:
+		logger.exception("Transformation job failed")
+		raise
 
-    root = os.path.dirname(os.path.dirname(__file__))
-    validated_path = os.environ.get("VALIDATED_PATH") or os.path.join(root, "output", "validated", "countries", "validated.parquet")
-    curated_dir = os.environ.get("CURATED_DIR") or os.path.join(root, "output", "curated", "countries")
-    curated_path_env = os.environ.get("CURATED_PATH")
-    os.makedirs(curated_dir, exist_ok=True)
+def run_transformation_spark(bucket_name="data-pipeline-bucket", validated_path="validated/countries/", curated_path="curated/countries/"):
+	"""Fallback transformation using standard PySpark (for local testing)."""
+	from pyspark.sql import SparkSession
+	from pyspark.sql.functions import col
 
-    try:
-        df = pd.read_parquet(validated_path, engine="pyarrow")
-    except Exception:
-        logger.exception("Failed to read validated parquet from %s", validated_path)
-        raise
-
-    # country_name from name.common
-    if "name.common" in df.columns:
-        df["country_name"] = df["name.common"]
-    else:
-        df["country_name"] = None
-
-    def extract_currency_name(x):
-        if not x or not isinstance(x, dict):
-            return None
-        for k, v in x.items():
-            if isinstance(v, dict) and v.get("name"):
-                return v.get("name")
-        return None
-
-    if "currencies" in df.columns:
-        df["currency_name"] = df["currencies"].apply(extract_currency_name)
-    else:
-        df["currency_name"] = None
-
-    out_cols = ["country_name", "region", "population", "currency_name"]
-    transformed = df[out_cols].copy()
-
-    # Overwrite: remove existing curated output before writing
-    try:
-        if curated_path_env:
-            if os.path.exists(curated_path_env):
-                if os.path.isdir(curated_path_env):
-                    shutil.rmtree(curated_path_env)
-                else:
-                    os.remove(curated_path_env)
-            transformed.to_parquet(curated_path_env, engine="pyarrow", index=False)
-            logger.info("Saved transformed parquet to %s", curated_path_env)
-        else:
-            if os.path.exists(curated_dir):
-                shutil.rmtree(curated_dir)
-            transformed.to_parquet(curated_dir, engine="pyarrow", index=False, partition_cols=["region"]) 
-            logger.info("Saved transformed parquet to %s partitioned by region", curated_dir)
-    except Exception:
-        logger.exception("Failed to write transformed parquet")
-        raise
-
-
-def run_spark():
-    from pyspark.sql import SparkSession
-    from pyspark.sql.functions import col
-
-    spark = SparkSession.builder.appName("TransformationJob").getOrCreate()
-    validated_df = spark.read.parquet("s3://my-bucket/validated/countries/")
-    transformed_df = validated_df.select(
-        col("name.common").alias("country_name"),
-        col("region"),
-        col("population"),
-        col("currencies.USD.name").alias("currency_name")
-    )
-    transformed_df.write.mode("overwrite").partitionBy("region").parquet(
-        "s3://my-bucket/curated/countries/"
-    )
-
+	try:
+		spark = SparkSession.builder.appName("TransformationJob").getOrCreate()
+		
+		validated_s3_path = f"s3://{bucket_name}/{validated_path}"
+		curated_s3_path = f"s3://{bucket_name}/{curated_path}"
+		
+		logger.info("Reading validated data from %s", validated_s3_path)
+		validated_df = spark.read.parquet(validated_s3_path)
+		
+		logger.info("Transforming data (flattening and selecting columns)")
+		transformed_df = validated_df.select(
+			col("name.common").alias("country_name"),
+			col("region"),
+			col("population"),
+			col("currencies").alias("currency_name")
+		)
+		
+		logger.info("Writing curated data to %s partitioned by region", curated_s3_path)
+		transformed_df.write.mode("overwrite").partitionBy("region").parquet(curated_s3_path)
+		
+		logger.info("Transformation completed successfully")
+		return transformed_df.count()
+	except Exception:
+		logger.exception("Transformation job failed")
+		raise
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--local", action="store_true", help="Run transformation locally using output/validated/")
-    args = parser.parse_args()
+	parser = argparse.ArgumentParser(description="AWS Glue transformation job for country population data")
+	parser.add_argument("--bucket-name", default=None, help="AWS S3 bucket name (default: data-pipeline-bucket)")
+	parser.add_argument("--validated-path", default="validated/countries/", help="S3 path to validated parquet")
+	parser.add_argument("--curated-path", default="curated/countries/", help="S3 path for curated parquet output")
+	args = parser.parse_args()
 
-    if args.local:
-        run_local()
-    else:
-        run_spark()
-
+	import os
+	bucket_name = args.bucket_name or os.environ.get("S3_BUCKET", "data-pipeline-bucket")
+	
+	logger.info("Using S3 bucket: %s", bucket_name)
+	logger.info("Running transformation job...")
+	record_count = run_transformation(bucket_name, args.validated_path, args.curated_path)
+	logger.info("Total transformed records: %d", record_count)
 
 if __name__ == "__main__":
-    main()
+	main()
