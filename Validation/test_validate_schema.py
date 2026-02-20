@@ -46,8 +46,12 @@ class TestRunValidation:
 		mock_df = Mock()
 		mock_filter_result = Mock()
 		
-		# Setup col mock
-		mock_col.return_value = MagicMock()
+		# Setup col mock to support chaining and operators
+		mock_col_result = MagicMock()
+		mock_col_result.isNotNull.return_value = mock_col_result
+		mock_col_result.__gt__.return_value = mock_col_result
+		mock_col_result.__and__.return_value = mock_col_result
+		mock_col.return_value = mock_col_result
 		
 		# Setup DataFrame mocks
 		mock_df.filter.return_value = mock_filter_result
@@ -61,6 +65,7 @@ class TestRunValidation:
 		
 		assert result == 10
 		mock_df.filter.assert_called_once()
+		mock_col.assert_called()
 
 	@patch("pyspark.sql.functions.col")
 	@patch("pyspark.sql.SparkSession")
@@ -72,8 +77,12 @@ class TestRunValidation:
 		mock_write = Mock()
 		mock_mode_result = Mock()
 		
-		# Setup col mock
-		mock_col.return_value = MagicMock()
+		# Setup col mock to support chaining and operators
+		mock_col_result = MagicMock()
+		mock_col_result.isNotNull.return_value = mock_col_result
+		mock_col_result.__gt__.return_value = mock_col_result
+		mock_col_result.__and__.return_value = mock_col_result
+		mock_col.return_value = mock_col_result
 		
 		# Setup DataFrame chain mocks
 		mock_df.filter.return_value = mock_filter_result
