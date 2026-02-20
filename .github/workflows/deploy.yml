@@ -14,7 +14,8 @@ on:
 env:
   AWS_REGION: us-east-1
   S3_BUCKET: data-pipeline-bucket
-  IAM_ROLE_NAME: spark-validation-role
+  STACK_NAME: data-pipeline-stack
+  ENVIRONMENT: dev
 
 jobs:
   build:
@@ -58,21 +59,65 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: 3.9
-
-      - name: Install dependencies
+      - name: Deploy CloudFormation stack
         run: |
-          python -m pip install --upgrade pip
-          pip install boto3
+          echo "Creating CloudFormation stack for S3 bucket and IAM role..."
+          aws cloudformation deploy \
+            --template-file infra/cloudformation/s3-bucket.yaml \
+            --stack-name ${{ env.STACK_NAME }} \
+            --parameter-overrides \
+              BucketName=${{ env.S3_BUCKET }} \
+              Environment=${{ env.ENVIRONMENT }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+          echo "✓ CloudFormation stack deployed successfully"
+
+      - name: Get bucket name from CloudFormation
+        id: cfn-outputs
+        run: |
+          BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue' \
+            --output text \
+            --region ${{ env.AWS_REGION }})
+          echo "bucket_name=$BUCKET_NAME" >> $GITHUB_OUTPUT
+          echo "✓ Bucket created: $BUCKET_NAME"
 
       - name: Deploy validation script to S3
         run: |
-          aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/ || echo "Note: S3 upload skipped (bucket may not exist)"
-          aws s3 cp infra/iam/s3_access_policy.json s3://${{ env.S3_BUCKET }}/policies/ || echo "Note: S3 upload skipped (bucket may not exist)"
+          BUCKET_NAME=${{ steps.cfn-outputs.outputs.bucket_name }}
+          aws s3 cp Validation/validate_schema.py s3://${BUCKET_NAME}/scripts/validate_schema.py
+          echo "✓ Uploaded validation script to S3"
 
-      - name: Notify deployment
+      - name: Deploy transformation script to S3
+        run: |
+          BUCKET_NAME=${{ steps.cfn-outputs.outputs.bucket_name }}
+          aws s3 cp Transformation/transform_data.py s3://${BUCKET_NAME}/scripts/transform_data.py
+          echo "✓ Uploaded transformation script to S3"
+
+      - name: Deploy IAM policies to S3
+        run: |
+          BUCKET_NAME=${{ steps.cfn-outputs.outputs.bucket_name }}
+          aws s3 cp infra/iam/s3_access_policy.json s3://${BUCKET_NAME}/policies/s3_access_policy.json
+          echo "✓ Uploaded IAM policy to S3"
+
+      - name: List deployed files
+        run: |
+          BUCKET_NAME=${{ steps.cfn-outputs.outputs.bucket_name }}
+          echo "Files in S3 bucket: $BUCKET_NAME"
+          aws s3 ls s3://${BUCKET_NAME}/ --recursive
+
+      - name: Verify bucket exists
+        run: |
+          BUCKET_NAME=${{ steps.cfn-outputs.outputs.bucket_name }}
+          aws s3api head-bucket --bucket ${BUCKET_NAME}
+          echo "✅ S3 bucket $BUCKET_NAME verified and accessible!"
+
+      - name: Notify deployment success
         if: success()
-        run: echo "✅ Deployment workflow completed successfully!"
+        run: |
+          BUCKET_NAME=${{ steps.cfn-outputs.outputs.bucket_name }}
+          echo "✅ Deployment to AWS successful!"
+          echo "Bucket: $BUCKET_NAME"
+          echo "Region: ${{ env.AWS_REGION }}"
