@@ -38,13 +38,20 @@ class TestSetupAwsInfrastructure:
 
 
 class TestRunValidation:
+	@patch("pyspark.sql.functions.col")
 	@patch("pyspark.sql.SparkSession")
-	def test_validation_filters_records(self, mock_spark_session):
+	def test_validation_filters_records(self, mock_spark_session, mock_col):
 		"""Test that validation filters records with population > 0."""
 		mock_spark = Mock()
 		mock_df = Mock()
-		mock_df.filter.return_value = mock_df
-		mock_df.count.return_value = 10
+		mock_filter_result = Mock()
+		
+		# Setup col mock
+		mock_col.return_value = MagicMock()
+		
+		# Setup DataFrame mocks
+		mock_df.filter.return_value = mock_filter_result
+		mock_filter_result.count.return_value = 10
 		
 		mock_spark.read.json.return_value = mock_df
 		mock_spark_session.builder.appName.return_value.getOrCreate.return_value = mock_spark
@@ -55,16 +62,24 @@ class TestRunValidation:
 		assert result == 10
 		mock_df.filter.assert_called_once()
 
+	@patch("pyspark.sql.functions.col")
 	@patch("pyspark.sql.SparkSession")
-	def test_validation_writes_parquet(self, mock_spark_session):
+	def test_validation_writes_parquet(self, mock_spark_session, mock_col):
 		"""Test that validation writes output to S3."""
 		mock_spark = Mock()
 		mock_df = Mock()
+		mock_filter_result = Mock()
 		mock_write = Mock()
-		mock_df.filter.return_value = mock_df
-		mock_df.write = mock_write
-		mock_write.mode.return_value.parquet = Mock()
-		mock_df.count.return_value = 5
+		mock_mode_result = Mock()
+		
+		# Setup col mock
+		mock_col.return_value = MagicMock()
+		
+		# Setup DataFrame chain mocks
+		mock_df.filter.return_value = mock_filter_result
+		mock_filter_result.write = mock_write
+		mock_write.mode.return_value = mock_mode_result
+		mock_filter_result.count.return_value = 5
 		
 		mock_spark.read.json.return_value = mock_df
 		mock_spark_session.builder.appName.return_value.getOrCreate.return_value = mock_spark
@@ -73,3 +88,4 @@ class TestRunValidation:
 		run_validation("test-bucket")
 		
 		mock_write.mode.assert_called_with("overwrite")
+		mock_mode_result.parquet.assert_called_once()
