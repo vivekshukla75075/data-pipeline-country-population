@@ -115,7 +115,7 @@ def setup_aws_infrastructure(bucket_name="data-pipeline-country-population", rol
 	try:
 		iam_client.put_role_policy(
 			RoleName=role_name,
-			PolicyName="S3AccessPolicy",
+			PolicyName="S3AccessPolicy_datapipeline",
 			PolicyDocument=json.dumps(s3_policy)
 		)
 		logger.info("Attached S3 access policy to Glue role: %s", role_name)
