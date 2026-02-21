@@ -35,7 +35,7 @@ aws iam create-role \
       "Principal": {"Service": "lambda.amazonaws.com"},
       "Action": "sts:AssumeRole"
     }]
-  }' 2>/dev/null || echo -e "${GREEN}Role already exists${NC}"
+  }' --region $AWS_REGION 2>/dev/null || echo -e "${GREEN}Role already exists${NC}"
 
 # Attach policies to Lambda role
 aws iam attach-role-policy \
@@ -87,11 +87,17 @@ deploy_lambda() {
   
   echo "Deploying $function_name..."
   
+  # Check if zip file exists
+  if [ ! -f "$zip_file" ]; then
+    echo -e "${YELLOW}⚠️ Zip file not found: $zip_file${NC}"
+    return 1
+  fi
+  
   if aws lambda get-function --function-name $function_name --region $AWS_REGION 2>/dev/null; then
     aws lambda update-function-code \
       --function-name $function_name \
       --zip-file fileb://$zip_file \
-      --region $AWS_REGION
+      --region $AWS_REGION 2>/dev/null || echo -e "${YELLOW}⚠️ Could not update function${NC}"
   else
     aws lambda create-function \
       --function-name $function_name \
@@ -102,22 +108,34 @@ deploy_lambda() {
       --timeout 300 \
       --memory-size 256 \
       --environment "Variables={S3_BUCKET=$S3_BUCKET,GLUE_INGESTION_JOB=country-population-ingestion,GLUE_VALIDATION_JOB=country-population-validation,GLUE_TRANSFORMATION_JOB=country-population-transformation}" \
-      --region $AWS_REGION
+      --region $AWS_REGION 2>/dev/null || echo -e "${YELLOW}⚠️ Could not create function${NC}"
   fi
 }
 
-# Package lambda functions
-cd lambda_functions/orchestration
-zip -r lambda_functions.zip . 2>/dev/null || true
-cd ../..
+# Package lambda functions (if directory exists)
+if [ -d "lambda_functions/orchestration" ]; then
+  cd lambda_functions/orchestration
+  zip -r lambda_functions.zip . 2>/dev/null || true
+  cd ../..
+  
+  deploy_lambda "trigger-ingestion" "trigger_ingestion.lambda_handler" "lambda_functions/orchestration/lambda_functions.zip"
+  deploy_lambda "trigger-validation" "trigger_validation.lambda_handler" "lambda_functions/orchestration/lambda_functions.zip"
+  deploy_lambda "trigger-transformation" "trigger_transformation.lambda_handler" "lambda_functions/orchestration/lambda_functions.zip"
+  deploy_lambda "query-athena" "query_athena.lambda_handler" "lambda_functions/orchestration/lambda_functions.zip"
+else
+  echo -e "${YELLOW}⚠️ Lambda functions directory not found${NC}"
+fi
 
-deploy_lambda "trigger-ingestion" "trigger_ingestion.lambda_handler" "lambda_functions/orchestration/lambda_functions.zip"
-deploy_lambda "trigger-validation" "trigger_validation.lambda_handler" "lambda_functions/orchestration/lambda_functions.zip"
-deploy_lambda "trigger-transformation" "trigger_transformation.lambda_handler" "lambda_functions/orchestration/lambda_functions.zip"
-deploy_lambda "query-athena" "query_athena.lambda_handler" "lambda_functions/orchestration/lambda_functions.zip"
-deploy_lambda "create-glue-catalog" "create_glue_catalog.lambda_handler" "lambda_functions/catalog/lambda_functions.zip"
+if [ -d "lambda_functions/catalog" ]; then
+  cd lambda_functions/catalog
+  zip -r lambda_functions.zip . 2>/dev/null || true
+  cd ../..
+  deploy_lambda "create-glue-catalog" "create_glue_catalog.lambda_handler" "lambda_functions/catalog/lambda_functions.zip"
+else
+  echo -e "${YELLOW}⚠️ Catalog lambda directory not found${NC}"
+fi
 
-echo -e "${GREEN}✓ Lambda Functions deployed${NC}"
+echo -e "${GREEN}✓ Lambda Functions deployment completed${NC}"
 
 # Step 4: Create Glue Jobs
 echo -e "${YELLOW}[4/7] Creating Glue Jobs...${NC}"
@@ -211,28 +229,6 @@ aws stepfunctions create-state-machine \
   --region $AWS_REGION 2>/dev/null || echo -e "${GREEN}State Machine already exists${NC}"
 
 echo -e "${GREEN}✓ Step Functions State Machine created${NC}"
-
-# Step 7: Create Athena Tables
-echo -e "${YELLOW}[7/7] Creating Athena Tables...${NC}"
-
-aws athena start-query-execution \
-  --query-string "CREATE EXTERNAL TABLE IF NOT EXISTS country_population.countries_curated (
-    country_name STRING,
-    subregion STRING,
-    population BIGINT,
-    area DOUBLE,
-    capital_city STRING,
-    currency STRING
-  )
-  PARTITIONED BY (region STRING)
-  STORED AS PARQUET
-  LOCATION 's3://$S3_BUCKET/curated/countries/'
-  TBLPROPERTIES ('classification'='parquet')" \
-  --query-execution-context Database=country_population \
-  --result-configuration OutputLocation=s3://$S3_BUCKET/athena-results/ \
-  --region $AWS_REGION 2>/dev/null || echo -e "${GREEN}Table already exists${NC}"
-
-echo -e "${GREEN}✓ Athena Tables created${NC}"
 
 # Summary
 echo -e "${GREEN}"
