@@ -10,17 +10,71 @@ Logs info and errors using JSON format for structured logging.
 """
 
 import argparse
-import logging
 import json
 import os
 import sys
+import logging
 
-sys.path.insert(0, os.path.dirname(__file__))
+# ============================================
+# Handle imports for both Glue and local execution
+# ============================================
+try:
+	# Try Glue imports first
+	from awsglue.utils import getResolvedOptions
+	from awsglue.context import GlueContext
+	from awsglue.job import Job
+	from pyspark.context import SparkContext
+	from pyspark.sql.functions import col
+	IS_GLUE = True
+except ImportError:
+	IS_GLUE = False
 
-from utils.logger import setup_logger
-from utils.s3_utils import S3Utils
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-logger = setup_logger(__name__)
+# ============================================
+# S3 Utils (inline to avoid import issues in Glue)
+# ============================================
+class S3Utils:
+	"""Inline S3 utilities for Glue compatibility."""
+	
+	def __init__(self):
+		import boto3
+		self.s3_client = boto3.client("s3")
+	
+	def copy_object(self, source_bucket, source_key, dest_bucket, dest_key):
+		"""Copy object from source to destination."""
+		try:
+			self.s3_client.copy_object(
+				CopySource={'Bucket': source_bucket, 'Key': source_key},
+				Bucket=dest_bucket,
+				Key=dest_key
+			)
+			logger.info(f"✓ Copied s3://{source_bucket}/{source_key} → s3://{dest_bucket}/{dest_key}")
+			return True
+		except Exception as e:
+			logger.exception(f"Failed to copy object: {str(e)}")
+			return False
+	
+	def delete_object(self, bucket_name, key):
+		"""Delete object from S3."""
+		try:
+			self.s3_client.delete_object(Bucket=bucket_name, Key=key)
+			logger.info(f"✓ Deleted s3://{bucket_name}/{key}")
+			return True
+		except Exception as e:
+			logger.exception(f"Failed to delete object: {str(e)}")
+			return False
+	
+	def list_objects(self, bucket_name, prefix):
+		"""List objects in S3."""
+		try:
+			response = self.s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+			return response.get('Contents', [])
+		except Exception as e:
+			logger.exception(f"Failed to list S3 objects: {str(e)}")
+			return []
 
 def check_and_create_bucket(bucket_name):
 	"""Check if bucket exists, create if it doesn't."""
@@ -216,14 +270,9 @@ def archive_raw_files(bucket_name, raw_zone="raw/countries"):
 		logger.exception(f"Failed to archive raw files: {str(e)}")
 		return False
 
-def run_validation(bucket_name, raw_path, validated_path):
-	"""Run validation job on AWS Glue using PySpark."""
+def run_validation_glue(bucket_name, raw_path, validated_path):
+	"""Run validation in Glue environment."""
 	try:
-		from awsglue.context import GlueContext
-		from awsglue.job import Job
-		from pyspark.context import SparkContext
-		from pyspark.sql.functions import col
-		
 		sc = SparkContext()
 		glue_context = GlueContext(sc)
 		spark = glue_context.spark_session
@@ -251,14 +300,11 @@ def run_validation(bucket_name, raw_path, validated_path):
 		archive_raw_files(bucket_name, raw_zone)
 		
 		return record_count
-	except ImportError:
-		logger.info("AWS Glue libraries not available. Using standard PySpark instead.")
-		return run_validation_spark(bucket_name, raw_path, validated_path)
-	except Exception:
+	except Exception as e:
 		logger.exception("Validation job failed")
 		raise
 
-def run_validation_spark(bucket_name="data-pipeline-country-population", raw_path="raw/countries/countries_raw.json", validated_path="validated/countries/"):
+def run_validation_spark(bucket_name, raw_path, validated_path):
 	"""Fallback validation using standard PySpark (for local testing)."""
 	from pyspark.sql import SparkSession
 	from pyspark.sql.functions import col
@@ -287,44 +333,28 @@ def run_validation_spark(bucket_name="data-pipeline-country-population", raw_pat
 		archive_raw_files(bucket_name, raw_zone)
 		
 		return record_count
-	except Exception:
+	except Exception as e:
 		logger.exception("Validation job failed")
 		raise
 
 def main():
 	parser = argparse.ArgumentParser(description="AWS Glue validation job for country population data")
-	parser.add_argument("--setup-aws", action="store_true", help="Create AWS S3 bucket and IAM role before running validation")
-	parser.add_argument("--bucket-name", default=None, help="AWS S3 bucket name (default: data-pipeline-country-population)")
-	parser.add_argument("--role-name", default="glue-validation-role", help="IAM role name (default: glue-validation-role)")
-	parser.add_argument("--raw-path", default="raw/countries/countries_raw.json", help="S3 path to raw JSON file")
-	parser.add_argument("--validated-path", default="validated/countries/", help="S3 path for validated parquet output")
+	parser.add_argument("--bucket-name", default=None, help="AWS S3 bucket name")
+	parser.add_argument("--raw-path", default="raw/countries/", help="S3 path to raw files")
+	parser.add_argument("--validated-path", default="validated/countries/", help="S3 path for validated output")
 	args = parser.parse_args()
 
-	# Use environment variable or command-line argument for bucket name
 	bucket_name = args.bucket_name or os.environ.get("S3_BUCKET", "data-pipeline-country-population")
-	role_name = args.role_name
 	
 	logger.info("Using S3 bucket: %s", bucket_name)
-	logger.info("Using IAM role: %s", role_name)
-
-	if args.setup_aws:
-		logger.info("Setting up AWS infrastructure (bucket and IAM role)...")
-		setup_aws_infrastructure(bucket_name, role_name)
-		logger.info("AWS infrastructure setup completed")
-		ensure_s3_directories(bucket_name)
-		upload_ingestion_script(bucket_name)
-		upload_all_scripts(bucket_name)
-
 	logger.info("Running validation job...")
-	record_count = run_validation(bucket_name, args.raw_path, args.validated_path)
+	
+	if IS_GLUE:
+		record_count = run_validation_glue(bucket_name, args.raw_path, args.validated_path)
+	else:
+		record_count = run_validation_spark(bucket_name, args.raw_path, args.validated_path)
+	
 	logger.info("Total validated records: %d", record_count)
-
-	# Glue job instructions
-	logger.info("To create the Glue job, use:")
-	logger.info("Job name: country-population-validation")
-	logger.info("IAM Role: glue-validation-role")
-	logger.info("Script location: s3://%s/scripts/validate_schema.py", bucket_name)
-	logger.info("Arguments: --bucket-name %s --raw-path raw/countries/countries_raw.json --validated-path validated/countries/", bucket_name)
 
 if __name__ == "__main__":
 	main()
