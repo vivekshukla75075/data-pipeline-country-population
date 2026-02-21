@@ -58,92 +58,28 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Verify S3 bucket exists
-        id: bucket-check
-        continue-on-error: true
-        run: |
-          BUCKET_NAME="${{ env.S3_BUCKET }}"
-          echo "bucket_name=$BUCKET_NAME" >> $GITHUB_OUTPUT
-          if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
-            echo "✓ S3 bucket exists: $BUCKET_NAME"
-            exit 0
-          else
-            echo "⚠️  S3 bucket does not exist yet: $BUCKET_NAME"
-            echo "Attempting to create bucket..."
-            if aws s3api create-bucket --bucket "$BUCKET_NAME" --region ${{ env.AWS_REGION }} 2>/dev/null; then
-              echo "✓ Created S3 bucket: $BUCKET_NAME"
-              exit 0
-            else
-              echo "⚠️  Could not create bucket (may already exist or insufficient permissions)"
-              exit 0
-            fi
-          fi
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
 
-      - name: Create IAM role for Glue (if not exists)
-        continue-on-error: true
-        run: |
-          ROLE_NAME="glue-validation-role"
-          
-          if aws iam get-role --role-name "$ROLE_NAME" 2>/dev/null; then
-            echo "✓ IAM role already exists: $ROLE_NAME"
-          else
-            echo "⚠️  Creating IAM role: $ROLE_NAME"
-            
-            cat > /tmp/trust-policy.json <<'EOF'
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Principal": {
-                  "Service": "glue.amazonaws.com"
-                },
-                "Action": "sts:AssumeRole"
-              }
-            ]
-          }
-          EOF
-            
-            aws iam create-role \
-              --role-name "$ROLE_NAME" \
-              --assume-role-policy-document file:///tmp/trust-policy.json 2>/dev/null && \
-            echo "✓ IAM role created: $ROLE_NAME" || \
-            echo "⚠️  Could not create IAM role (may lack permissions)"
-          fi
+      - name: Terraform Init
+        run: terraform -chdir=infra/terraform init
+
+      - name: Terraform Apply
+        run: terraform -chdir=infra/terraform apply -auto-approve
 
       - name: Deploy scripts to S3
-        continue-on-error: true
         run: |
-          BUCKET_NAME=${{ steps.bucket-check.outputs.bucket_name }}
-          
-          echo "Uploading validation script..."
-          aws s3 cp Validation/validate_schema.py s3://${BUCKET_NAME}/scripts/validate_schema.py 2>/dev/null && \
-          echo "✓ Uploaded validation script" || \
-          echo "⚠️  Could not upload validation script"
-          
-          echo "Uploading transformation script..."
-          aws s3 cp Transformation/transform_data.py s3://${BUCKET_NAME}/scripts/transform_data.py 2>/dev/null && \
-          echo "✓ Uploaded transformation script" || \
-          echo "⚠️  Could not upload transformation script"
-          
-          echo "Uploading IAM policies..."
-          aws s3 cp infra/iam/s3_access_policy.json s3://${BUCKET_NAME}/policies/s3_access_policy.json 2>/dev/null && \
-          echo "✓ Uploaded IAM policy" || \
-          echo "⚠️  Could not upload IAM policy"
+          aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py
+          aws s3 cp Transformation/transform_data.py s3://${{ env.S3_BUCKET }}/scripts/transform_data.py
+          aws s3 cp infra/iam/s3_access_policy.json s3://${{ env.S3_BUCKET }}/policies/s3_access_policy.json
 
       - name: List deployed files
-        continue-on-error: true
         run: |
-          BUCKET_NAME=${{ steps.bucket-check.outputs.bucket_name }}
-          echo "Files in S3 bucket: $BUCKET_NAME"
-          aws s3 ls s3://${BUCKET_NAME}/ --recursive 2>/dev/null || echo "Could not list files"
+          aws s3 ls s3://${{ env.S3_BUCKET }}/ --recursive
 
-      - name: Notify deployment
+      - name: Notify deployment success
+        if: success()
         run: |
-          BUCKET_NAME=${{ steps.bucket-check.outputs.bucket_name }}
-          echo "✅ Deployment workflow completed!"
-          echo "Bucket: $BUCKET_NAME"
+          echo "✅ Deployment to AWS successful!"
+          echo "Bucket: ${{ env.S3_BUCKET }}"
           echo "Region: ${{ env.AWS_REGION }}"
-          echo ""
-          echo "If bucket doesn't exist, manually create it with:"
-          echo "aws s3api create-bucket --bucket $BUCKET_NAME --region ${{ env.AWS_REGION }}"
