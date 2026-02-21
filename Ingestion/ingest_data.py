@@ -4,9 +4,14 @@ import sys
 import logging
 from datetime import datetime
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Setup logging FIRST
+logging.basicConfig(
+	level=logging.INFO, 
+	format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
+
+logger.info("=== Starting Ingestion Script ===")
 
 try:
 	# Import Glue libraries
@@ -14,14 +19,13 @@ try:
 	from awsglue.context import GlueContext
 	from awsglue.job import Job
 	from pyspark.context import SparkContext
-	from pyspark.sql.types import StructType, StructField, StringType, LongType, ArrayType, DoubleType
-	from pyspark.sql.functions import current_timestamp
 	
+	logger.info("✓ Glue imports successful")
 	IS_GLUE = True
-except ImportError:
+	
+except ImportError as e:
+	logger.error(f"Glue imports failed: {str(e)}")
 	IS_GLUE = False
-	logger.error("Glue imports failed - not running in Glue environment")
-	sys.exit(1)
 
 def fetch_api_data(url="https://restcountries.com/v3.1/all"):
 	"""Fetch data from REST Countries API."""
@@ -37,40 +41,13 @@ def fetch_api_data(url="https://restcountries.com/v3.1/all"):
 		logger.exception(f"Failed to fetch from API: {str(e)}")
 		raise
 
-def save_to_s3(spark, data, bucket_name, s3_path):
+def save_to_s3(data, bucket_name, s3_path):
 	"""Save fetched data as JSON to S3."""
 	try:
 		import json
-		from io import StringIO
-		
-		logger.info(f"Converting data to JSON and uploading to S3...")
-		
-		# Convert to JSON string
-		json_data = json.dumps(data, indent=2, default=str)
-		
-		# Create RDD and convert to DataFrame (for Spark)
-		rdd = spark.sparkContext.parallelize([json_data])
-		
-		# Write to S3
-		s3_path_full = f"s3://{bucket_name}/{s3_path}"
-		logger.info(f"Writing to: {s3_path_full}")
-		
-		rdd.saveAsTextFile(s3_path_full)
-		
-		logger.info(f"✓ Data saved to S3: {s3_path_full}")
-		return True
-	except Exception as e:
-		logger.exception(f"Failed to save to S3: {str(e)}")
-		raise
-
-def save_as_json_file(spark, data, bucket_name, s3_path):
-	"""Save data as single JSON file to S3 (better approach)."""
-	try:
-		import json
 		import boto3
-		from datetime import datetime
 		
-		logger.info(f"Saving data as JSON file to S3...")
+		logger.info(f"Saving data to S3...")
 		
 		# Generate filename with timestamp
 		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -92,23 +69,24 @@ def save_as_json_file(spark, data, bucket_name, s3_path):
 		logger.info(f"✓ Saved JSON file: s3://{bucket_name}/{s3_key}")
 		return True
 	except Exception as e:
-		logger.exception(f"Failed to save JSON file: {str(e)}")
+		logger.exception(f"Failed to save to S3: {str(e)}")
 		raise
 
-def main():
+def main_glue():
 	"""Main Glue job function."""
 	try:
-		logger.info("=== Starting Ingestion Job ===")
+		logger.info("Running in Glue environment")
 		
 		# Initialize Glue job
 		args = getResolvedOptions(sys.argv, ['JOB_NAME', 'TempDir'])
+		logger.info(f"Job Name: {args['JOB_NAME']}")
+		
 		sc = SparkContext()
 		glue_context = GlueContext(sc)
-		spark = glue_context.spark_session
 		job = Job(glue_context)
 		job.init(args['JOB_NAME'], args)
 		
-		logger.info(f"Job Name: {args['JOB_NAME']}")
+		logger.info("✓ Glue context initialized")
 		
 		# Configuration
 		api_url = "https://restcountries.com/v3.1/all"
@@ -123,22 +101,50 @@ def main():
 		data = fetch_api_data(api_url)
 		
 		# Save to S3
-		save_as_json_file(spark, data, bucket_name, raw_zone)
+		save_to_s3(data, bucket_name, raw_zone)
 		
 		logger.info("=== Ingestion Job Completed Successfully ===")
 		
 		# Commit Glue job
 		job.commit()
-		return True
+		logger.info("✓ Glue job committed")
 		
 	except Exception as e:
-		logger.exception("Ingestion job failed")
-		return False
+		logger.exception(f"Glue job failed: {str(e)}")
+		raise
+
+def main_local():
+	"""Main function for local testing."""
+	try:
+		logger.info("Running locally (not in Glue)")
+		
+		# Configuration
+		api_url = "https://restcountries.com/v3.1/all"
+		bucket_name = "data-pipeline-country-population"
+		raw_zone = "raw/countries"
+		
+		logger.info(f"API URL: {api_url}")
+		logger.info(f"S3 Bucket: {bucket_name}")
+		logger.info(f"Raw Zone: {raw_zone}")
+		
+		# Fetch from API
+		data = fetch_api_data(api_url)
+		
+		# Save to S3
+		save_to_s3(data, bucket_name, raw_zone)
+		
+		logger.info("=== Ingestion Completed Successfully ===")
+		
+	except Exception as e:
+		logger.exception(f"Ingestion failed: {str(e)}")
+		raise
 
 if __name__ == "__main__":
-	if IS_GLUE:
-		success = main()
-		sys.exit(0 if success else 1)
-	else:
-		logger.error("Must run in AWS Glue environment")
-		sys.exit(1)
+	try:
+		if IS_GLUE:
+			main_glue()
+		else:
+			main_local()
+	except Exception as e:
+		logger.exception(f"Fatal error: {str(e)}")
+		# Don't exit with error code - let CloudWatch Logs capture it
