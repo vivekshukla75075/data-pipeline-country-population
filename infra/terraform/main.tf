@@ -2,11 +2,6 @@ provider "aws" {
   region = "us-east-1"
 }
 
-resource "aws_s3_bucket" "data_pipeline" {
-  bucket = "data-pipeline-country-population"
-  force_destroy = true
-}
-
 resource "aws_s3_bucket_versioning" "versioning" {
   bucket = aws_s3_bucket.data_pipeline.id
   versioning_configuration {
@@ -14,16 +9,12 @@ resource "aws_s3_bucket_versioning" "versioning" {
   }
 }
 
-resource "aws_iam_role" "glue_validation_role" {
+data "aws_s3_bucket" "existing" {
+  bucket = "data-pipeline-country-population"
+}
+
+data "aws_iam_role" "existing_glue_role" {
   name = "glue-validation-role"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = { Service = "glue.amazonaws.com" }
-      Action = "sts:AssumeRole"
-    }]
-  })
 }
 
 resource "aws_iam_role_policy" "glue_s3_policy" {
