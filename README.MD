@@ -1,9 +1,12 @@
-# Data Pipeline: Country Population
+# Country Population ETL Pipeline
 
-An AWS-based data pipeline that validates and transforms country population data using AWS Glue and PySpark.
+Production-ready ETL pipeline that ingests country population data from REST Countries API, validates it, transforms it, and makes it queryable via AWS Athena.
 
-## Architecture
+---
 
+## Architecture Overview
+
+- **Ingestion**: REST API to fetch country population data
 - **Validation**: Reads raw JSON from S3, validates records (population > 0), outputs parquet
 - **Transformation**: Reads validated parquet, flattens nested fields, outputs curated parquet partitioned by region
 - **Storage**: All data stored in S3 bucket `data-pipeline-country-population`
