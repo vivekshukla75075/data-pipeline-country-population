@@ -1,7 +1,30 @@
+# Core dependencies
+boto3==1.26.137
+requests==2.31.0
+pyspark==3.4.0
+
+# Data processing
 pandas==1.5.3
 pyarrow==12.0.0
-pyspark==3.4.0
-boto3==1.26.137
+numpy==1.24.3
+
+# Testing
 pytest==7.3.1
 pytest-cov==4.1.0
+moto==4.1.0
+
+# Linting and code quality
 flake8==6.0.0
+black==23.3.0
+isort==5.12.0
+
+# Logging and monitoring
+python-json-logger==2.0.7
+
+# Configuration management
+python-dotenv==1.0.0
+pyyaml==6.0
+
+# AWS specific
+awsglue==0.0.1
+aws-cdk-lib==2.80.0

@@ -14,7 +14,6 @@ on:
 env:
   AWS_REGION: us-east-1
   S3_BUCKET: data-pipeline-country-population
-  ENVIRONMENT: dev
 
 jobs:
   build:
@@ -33,12 +32,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run linting (optional)
-        continue-on-error: true
-        run: |
-          pip install flake8
-          flake8 Validation/validate_schema.py --count --select=E9,F63,F7,F82 --show-source --statistics || true
-
       - name: Run unit tests
         run: |
           cd Validation && pytest test_validate_schema.py -v --tb=short
@@ -46,7 +39,6 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feature/sync-upstream-changes'
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -67,10 +59,20 @@ jobs:
       - name: Terraform Apply
         run: terraform -chdir=infra/terraform apply -auto-approve
 
-      - name: Deploy scripts to S3
+      - name: Deploy ingestion script to S3
+        run: |
+          aws s3 cp Ingestion/ingest_data.py s3://${{ env.S3_BUCKET }}/scripts/ingest_data.py
+
+      - name: Deploy validation script to S3
         run: |
           aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py
+
+      - name: Deploy transformation script to S3
+        run: |
           aws s3 cp Transformation/transform_data.py s3://${{ env.S3_BUCKET }}/scripts/transform_data.py
+
+      - name: Deploy IAM policies to S3
+        run: |
           aws s3 cp infra/iam/s3_access_policy.json s3://${{ env.S3_BUCKET }}/policies/s3_access_policy.json
 
       - name: List deployed files

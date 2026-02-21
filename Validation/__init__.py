@@ -1,1 +1,1 @@
-"""Validation package for data pipeline."""
+"""Validation module for data pipeline."""

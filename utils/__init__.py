@@ -1,1 +1,1 @@
-"""Utility modules for the data pipeline"""
+"""Utilities module for ETL pipeline."""

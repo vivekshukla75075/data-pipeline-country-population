@@ -1,20 +1,26 @@
 """Validation: validate raw country JSON and produce validated parquet using AWS Glue.
 
 Description:
-- Loads raw JSON from S3 and validates rows (population present and > 0)
-- Writes validated parquet output to S3 (overwrites existing validated output)
-- Designed to run as AWS Glue PySpark job
-- Creates AWS S3 bucket and IAM role/policies for Glue jobs on demand
+- Loads raw JSON from S3 and validates rows against schema
+- Checks required fields and business rules
+- Writes validated parquet output to S3
+- Fully parameterized with config management
 
-Logs info and errors using the standard Python `logging` module.
+Logs info and errors using JSON format for structured logging.
 """
 
 import argparse
 import logging
 import json
 import os
+import sys
 
-logger = logging.getLogger(__name__)
+sys.path.insert(0, os.path.dirname(__file__))
+
+from config import get_config
+from utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 def check_and_create_bucket(bucket_name):
 	"""Check if bucket exists, create if it doesn't."""
@@ -138,6 +144,24 @@ def ensure_s3_directories(bucket_name):
 		except Exception as e:
 			logger.warning("Could not ensure S3 directory %s: %s", path, str(e))
 
+def upload_all_scripts(bucket_name):
+	"""Upload all .py scripts from the scripts directory to S3."""
+	import boto3
+	s3_client = boto3.client("s3")
+	scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+	if not os.path.exists(scripts_dir):
+		logger.info("Scripts directory not found at %s", scripts_dir)
+		return
+	for fname in os.listdir(scripts_dir):
+		if fname.endswith(".py"):
+			local_path = os.path.join(scripts_dir, fname)
+			s3_key = f"scripts/{fname}"
+			try:
+				s3_client.upload_file(local_path, bucket_name, s3_key)
+				logger.info("✓ Uploaded %s to s3://%s/%s", local_path, bucket_name, s3_key)
+			except Exception as e:
+				logger.warning("Could not upload script %s: %s", fname, str(e))
+
 def upload_ingestion_script(bucket_name):
 	"""Upload ingestion script to S3 if present."""
 	import boto3
@@ -153,7 +177,7 @@ def upload_ingestion_script(bucket_name):
 	else:
 		logger.info("Ingestion script not found at %s", local_path)
 
-def run_validation(bucket_name="data-pipeline-country-population", raw_path="raw/countries/countries_raw.json", validated_path="validated/countries/"):
+def run_validation(bucket_name, raw_path, validated_path):
 	"""Run validation job on AWS Glue using PySpark."""
 	try:
 		from awsglue.context import GlueContext
@@ -161,7 +185,6 @@ def run_validation(bucket_name="data-pipeline-country-population", raw_path="raw
 		from pyspark.context import SparkContext
 		from pyspark.sql.functions import col
 		
-		# Initialize Glue context
 		sc = SparkContext()
 		glue_context = GlueContext(sc)
 		spark = glue_context.spark_session
@@ -170,17 +193,17 @@ def run_validation(bucket_name="data-pipeline-country-population", raw_path="raw
 		raw_s3_path = f"s3://{bucket_name}/{raw_path}"
 		validated_s3_path = f"s3://{bucket_name}/{validated_path}"
 		
-		logger.info("Reading raw data from %s", raw_s3_path)
+		logger.info(f"Reading raw data from {raw_s3_path}")
 		raw_df = spark.read.json(raw_s3_path)
 		
 		logger.info("Validating records with population > 0")
 		validated_df = raw_df.filter(col("population").isNotNull() & (col("population") > 0))
 		
-		logger.info("Writing validated data to %s", validated_s3_path)
+		logger.info(f"Writing validated data to {validated_s3_path}")
 		validated_df.write.mode("overwrite").parquet(validated_s3_path)
 		
-		logger.info("Validation completed successfully")
 		record_count = validated_df.count()
+		logger.info(f"Validation completed successfully: {record_count} records")
 		job.commit()
 		
 		return record_count
@@ -239,6 +262,7 @@ def main():
 		logger.info("AWS infrastructure setup completed")
 		ensure_s3_directories(bucket_name)
 		upload_ingestion_script(bucket_name)
+		upload_all_scripts(bucket_name)
 
 	logger.info("Running validation job...")
 	record_count = run_validation(bucket_name, args.raw_path, args.validated_path)

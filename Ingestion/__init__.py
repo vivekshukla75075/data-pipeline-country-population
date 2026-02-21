@@ -1,1 +1,1 @@
-"""Ingestion module for the data pipeline"""
+"""Ingestion module for data pipeline."""
