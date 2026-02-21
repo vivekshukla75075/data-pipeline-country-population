@@ -60,8 +60,12 @@ class TestRunValidation:
 		mock_spark.read.json.return_value = mock_df
 		mock_spark_session.builder.appName.return_value.getOrCreate.return_value = mock_spark
 		
-		from validate_schema import run_validation
-		result = run_validation("test-bucket")
+		from validate_schema import run_validation_spark
+		result = run_validation_spark(
+			bucket_name="test-bucket",
+			raw_path="raw/test.json",
+			validated_path="validated/test/"
+		)
 		
 		assert result == 10
 		mock_df.filter.assert_called_once()
@@ -93,8 +97,12 @@ class TestRunValidation:
 		mock_spark.read.json.return_value = mock_df
 		mock_spark_session.builder.appName.return_value.getOrCreate.return_value = mock_spark
 		
-		from validate_schema import run_validation
-		run_validation("test-bucket")
+		from validate_schema import run_validation_spark
+		run_validation_spark(
+			bucket_name="test-bucket",
+			raw_path="raw/test.json",
+			validated_path="validated/test/"
+		)
 		
 		mock_write.mode.assert_called_with("overwrite")
 		mock_mode_result.parquet.assert_called_once()
