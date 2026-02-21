@@ -5,7 +5,7 @@ Description:
 - Flattens fields and writes curated parquet partitioned by region
 - Designed to run as AWS Glue PySpark job
 
-Logs info and errors using the standard Python `logging` module..
+Logs info and errors using the standard Python `logging` module.
 """
 
 import argparse
