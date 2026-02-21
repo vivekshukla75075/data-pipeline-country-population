@@ -5,8 +5,6 @@ Description:
 - Saves with timestamp filename
 - Uploads to S3 raw zone
 - Full error handling and logging
-
-Logs info and errors using JSON format for structured logging.
 """
 
 import requests
@@ -17,6 +15,15 @@ import logging
 from datetime import datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# Try to use Glue logger, fallback to standard logging
+try:
+	from awsglue.utils import getResolvedOptions
+	from awsglue.context import GlueContext
+	from pyspark.context import SparkContext
+	IS_GLUE = True
+except ImportError:
+	IS_GLUE = False
 
 from utils.logger import setup_logger
 
@@ -70,14 +77,33 @@ def generate_filename_with_timestamp():
 	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 	return f"countries_raw_{timestamp}.json"
 
-def main():
-	"""Main ingestion job."""
+def run_ingestion_glue():
+	"""Run ingestion as Glue job."""
 	try:
-		# Get configuration
+		args = getResolvedOptions(sys.argv, ['JOB_NAME', 'S3_BUCKET'])
+		sc = SparkContext()
+		glue_context = GlueContext(sc)
+		job = glue_context.job
+		job.init(args['JOB_NAME'], args)
+		
+		bucket_name = args.get('S3_BUCKET', 'data-pipeline-country-population')
+		
+		logger.info(f"Running Glue job: {args['JOB_NAME']}")
+		main_ingestion(bucket_name)
+		
+		job.commit()
+		logger.info("✓ Glue job completed successfully")
+		return True
+	except Exception as e:
+		logger.exception("Glue job failed")
+		return False
+
+def main_ingestion(bucket_name):
+	"""Main ingestion logic."""
+	try:
 		api_url = os.environ.get("API_URL", "https://restcountries.com/v3.1/all")
 		api_timeout = int(os.environ.get("API_TIMEOUT", 30))
 		api_retries = int(os.environ.get("API_RETRIES", 3))
-		bucket_name = os.environ.get("S3_BUCKET", "data-pipeline-country-population")
 		raw_zone = os.environ.get("RAW_ZONE", "raw/countries")
 		
 		logger.info(f"Starting ingestion job for {api_url}")
@@ -97,15 +123,28 @@ def main():
 		s3_key = f"{raw_zone}/{filename}"
 		upload_to_s3(local_path, bucket_name, s3_key)
 		
-		logger.info(f"✓ Ingestion job completed successfully")
+		logger.info(f"✓ Ingestion completed successfully")
 		logger.info(f"File: {filename}")
 		logger.info(f"Location: s3://{bucket_name}/{s3_key}")
 		return True
-	
 	except Exception as e:
 		logger.exception("Ingestion job failed")
 		return False
 
+def main():
+	"""Main entry point."""
+	try:
+		bucket_name = os.environ.get("S3_BUCKET", "data-pipeline-country-population")
+		success = main_ingestion(bucket_name)
+		return success
+	except Exception as e:
+		logger.exception("Ingestion failed")
+		return False
+
 if __name__ == "__main__":
-	success = main()
+	if IS_GLUE:
+		success = run_ingestion_glue()
+	else:
+		success = main()
+	
 	sys.exit(0 if success else 1)
