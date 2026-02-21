@@ -122,6 +122,37 @@ def setup_aws_infrastructure(bucket_name="data-pipeline-country-population", rol
 	except Exception as e:
 		logger.warning("Could not attach S3 policy: %s. Error: %s", role_name, str(e))
 
+def ensure_s3_directories(bucket_name):
+	"""Ensure S3 directories exist by uploading a placeholder file to each."""
+	import boto3
+	s3_client = boto3.client("s3")
+	paths = [
+		"raw/countries/.keep",
+		"validated/countries/.keep",
+		"curated/countries/.keep"
+	]
+	for path in paths:
+		try:
+			s3_client.put_object(Bucket=bucket_name, Key=path, Body=b"")
+			logger.info("Ensured S3 directory: s3://%s/%s", bucket_name, path)
+		except Exception as e:
+			logger.warning("Could not ensure S3 directory %s: %s", path, str(e))
+
+def upload_ingestion_script(bucket_name):
+	"""Upload ingestion script to S3 if present."""
+	import boto3
+	s3_client = boto3.client("s3")
+	local_path = os.path.join(os.path.dirname(__file__), "..", "Ingestion", "ingest_data.py")
+	s3_key = "scripts/ingest_data.py"
+	if os.path.exists(local_path):
+		try:
+			s3_client.upload_file(local_path, bucket_name, s3_key)
+			logger.info("✓ Uploaded ingestion script to s3://%s/%s", bucket_name, s3_key)
+		except Exception as e:
+			logger.warning("Could not upload ingestion script: %s", str(e))
+	else:
+		logger.info("Ingestion script not found at %s", local_path)
+
 def run_validation(bucket_name="data-pipeline-country-population", raw_path="raw/countries/countries_raw.json", validated_path="validated/countries/"):
 	"""Run validation job on AWS Glue using PySpark."""
 	try:
@@ -206,10 +237,19 @@ def main():
 		logger.info("Setting up AWS infrastructure (bucket and IAM role)...")
 		setup_aws_infrastructure(bucket_name, role_name)
 		logger.info("AWS infrastructure setup completed")
+		ensure_s3_directories(bucket_name)
+		upload_ingestion_script(bucket_name)
 
 	logger.info("Running validation job...")
 	record_count = run_validation(bucket_name, args.raw_path, args.validated_path)
 	logger.info("Total validated records: %d", record_count)
+
+	# Glue job instructions
+	logger.info("To create the Glue job, use:")
+	logger.info("Job name: country-population-validation")
+	logger.info("IAM Role: glue-validation-role")
+	logger.info("Script location: s3://%s/scripts/validate_schema.py", bucket_name)
+	logger.info("Arguments: --bucket-name %s --raw-path raw/countries/countries_raw.json --validated-path validated/countries/", bucket_name)
 
 if __name__ == "__main__":
 	main()
