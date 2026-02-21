@@ -14,8 +14,8 @@ import sys
 import logging
 from datetime import datetime
 
-# Setup logging (inline to avoid import issues)
-logging.basicConfig(level=logging.INFO)
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def fetch_from_api(url="https://restcountries.com/v3.1/all", timeout=30, retries=3, retry_delay=5):
@@ -82,7 +82,7 @@ def main_ingestion(bucket_name):
 		
 		# Generate filename with timestamp
 		filename = generate_filename_with_timestamp()
-		local_path = f"raw_data/{filename}"
+		local_path = f"/tmp/{filename}"
 		
 		# Save locally
 		save_to_local(data, local_path)
@@ -103,6 +103,7 @@ def main():
 	"""Main entry point."""
 	try:
 		# Check if running in Glue
+		is_glue = False
 		try:
 			from awsglue.utils import getResolvedOptions
 			from awsglue.context import GlueContext
@@ -115,19 +116,22 @@ def main():
 			glue_context = GlueContext(sc)
 			job = Job(glue_context)
 			job.init(args['JOB_NAME'], args)
+			is_glue = True
 			
 			logger.info(f"Running as Glue job: {args['JOB_NAME']}")
-		except ImportError:
+		except:
 			logger.info("Not running in Glue environment, running locally")
 		
 		bucket_name = os.environ.get("S3_BUCKET", "data-pipeline-country-population")
 		success = main_ingestion(bucket_name)
 		
 		# Commit Glue job if running
-		try:
-			job.commit()
-		except:
-			pass
+		if is_glue:
+			try:
+				job.commit()
+				logger.info("✓ Glue job committed successfully")
+			except Exception as e:
+				logger.warning(f"Could not commit Glue job: {str(e)}")
 		
 		return success
 	except Exception as e:
@@ -136,4 +140,6 @@ def main():
 
 if __name__ == "__main__":
 	success = main()
-	sys.exit(0 if success else 1)
+	# Don't exit with error code in Glue - let Glue handle it
+	if not success:
+		logger.error("Ingestion script completed with errors")
