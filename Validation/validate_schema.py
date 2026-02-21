@@ -160,7 +160,7 @@ def run_validation(bucket_name="data-pipeline-country-population", raw_path="raw
 		logger.exception("Validation job failed")
 		raise
 
-def run_validation_spark(bucket_name="data-pipeline-bucket", raw_path="raw/countries/countries_raw.json", validated_path="validated/countries/"):
+def run_validation_spark(bucket_name="data-pipeline-country-population", raw_path="raw/countries/countries_raw.json", validated_path="validated/countries/"):
 	"""Fallback validation using standard PySpark (for local testing)."""
 	from pyspark.sql import SparkSession
 	from pyspark.sql.functions import col
