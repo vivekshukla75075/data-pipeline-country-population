@@ -83,14 +83,10 @@ jobs:
         run: |
           pip install awscli
 
-      - name: Run automated deployment
+      - name: Run full deployment
         run: |
-          if [ -f "infrastructure/scripts/deploy_pipeline.sh" ]; then
-            chmod +x infrastructure/scripts/deploy_pipeline.sh
-            ./infrastructure/scripts/deploy_pipeline.sh
-          else
-            echo "⚠️ Deployment script not found at infrastructure/scripts/deploy_pipeline.sh"
-          fi
+          chmod +x infrastructure/scripts/full_deployment.sh
+          ./infrastructure/scripts/full_deployment.sh
 
       - name: Verify deployment
         run: |
