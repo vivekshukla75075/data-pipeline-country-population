@@ -14,7 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 def run_transformation(bucket_name="data-pipeline-country-population", validated_path="validated/countries/", curated_path="curated/countries/"):
-	"""Run transformation job on AWS Glue using PySpark."""
+	"""Run transformation job on AWS Glue using PySpark.."""
 	try:
 		from awsglue.context import GlueContext
 		from awsglue.job import Job
