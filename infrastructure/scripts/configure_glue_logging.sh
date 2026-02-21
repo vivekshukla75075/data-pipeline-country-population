@@ -31,7 +31,8 @@ echo -e "${GREEN}✓ Log groups created${NC}"
 echo -e "${YELLOW}Updating Glue jobs with logging configuration...${NC}"
 
 BUCKET_NAME="data-pipeline-country-population"
-ROLE_ARN="arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/glue-validation-role"
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ROLE_ARN="arn:aws:iam::$ACCOUNT_ID:role/glue-validation-role"
 
 # Update ingestion job
 aws glue update-job \
@@ -49,7 +50,7 @@ aws glue update-job \
     "--continuous-log-logGroup": "/aws-glue/jobs/country-population-ingestion",
     "--continuous-log-logStreamPrefix": "ingestion"
   }' \
-  --region $AWS_REGION 2>/dev/null || echo "Job update failed or job doesn't exist"
+  --region $AWS_REGION 2>/dev/null || echo "Job update failed (may not exist yet)"
 
 # Update validation job
 aws glue update-job \
@@ -67,7 +68,7 @@ aws glue update-job \
     "--continuous-log-logGroup": "/aws-glue/jobs/country-population-validation",
     "--continuous-log-logStreamPrefix": "validation"
   }' \
-  --region $AWS_REGION 2>/dev/null || echo "Job update failed or job doesn't exist"
+  --region $AWS_REGION 2>/dev/null || echo "Job update failed (may not exist yet)"
 
 # Update transformation job
 aws glue update-job \
@@ -85,7 +86,7 @@ aws glue update-job \
     "--continuous-log-logGroup": "/aws-glue/jobs/country-population-transformation",
     "--continuous-log-logStreamPrefix": "transformation"
   }' \
-  --region $AWS_REGION 2>/dev/null || echo "Job update failed or job doesn't exist"
+  --region $AWS_REGION 2>/dev/null || echo "Job update failed (may not exist yet)"
 
 echo -e "${GREEN}✓ Glue jobs updated with logging configuration${NC}"
 
