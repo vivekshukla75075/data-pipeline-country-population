@@ -14,20 +14,9 @@ import sys
 import logging
 from datetime import datetime
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-# Try to use Glue logger, fallback to standard logging
-try:
-	from awsglue.utils import getResolvedOptions
-	from awsglue.context import GlueContext
-	from pyspark.context import SparkContext
-	IS_GLUE = True
-except ImportError:
-	IS_GLUE = False
-
-from utils.logger import setup_logger
-
-logger = setup_logger(__name__)
+# Setup logging (inline to avoid import issues)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def fetch_from_api(url="https://restcountries.com/v3.1/all", timeout=30, retries=3, retry_delay=5):
 	"""Fetch country data from API with retry logic."""
@@ -77,27 +66,6 @@ def generate_filename_with_timestamp():
 	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 	return f"countries_raw_{timestamp}.json"
 
-def run_ingestion_glue():
-	"""Run ingestion as Glue job."""
-	try:
-		args = getResolvedOptions(sys.argv, ['JOB_NAME', 'S3_BUCKET'])
-		sc = SparkContext()
-		glue_context = GlueContext(sc)
-		job = glue_context.job
-		job.init(args['JOB_NAME'], args)
-		
-		bucket_name = args.get('S3_BUCKET', 'data-pipeline-country-population')
-		
-		logger.info(f"Running Glue job: {args['JOB_NAME']}")
-		main_ingestion(bucket_name)
-		
-		job.commit()
-		logger.info("✓ Glue job completed successfully")
-		return True
-	except Exception as e:
-		logger.exception("Glue job failed")
-		return False
-
 def main_ingestion(bucket_name):
 	"""Main ingestion logic."""
 	try:
@@ -134,17 +102,38 @@ def main_ingestion(bucket_name):
 def main():
 	"""Main entry point."""
 	try:
+		# Check if running in Glue
+		try:
+			from awsglue.utils import getResolvedOptions
+			from awsglue.context import GlueContext
+			from awsglue.job import Job
+			from pyspark.context import SparkContext
+			
+			# Initialize Glue job
+			args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+			sc = SparkContext()
+			glue_context = GlueContext(sc)
+			job = Job(glue_context)
+			job.init(args['JOB_NAME'], args)
+			
+			logger.info(f"Running as Glue job: {args['JOB_NAME']}")
+		except ImportError:
+			logger.info("Not running in Glue environment, running locally")
+		
 		bucket_name = os.environ.get("S3_BUCKET", "data-pipeline-country-population")
 		success = main_ingestion(bucket_name)
+		
+		# Commit Glue job if running
+		try:
+			job.commit()
+		except:
+			pass
+		
 		return success
 	except Exception as e:
 		logger.exception("Ingestion failed")
 		return False
 
 if __name__ == "__main__":
-	if IS_GLUE:
-		success = run_ingestion_glue()
-	else:
-		success = main()
-	
+	success = main()
 	sys.exit(0 if success else 1)
