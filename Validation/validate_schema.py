@@ -1,9 +1,9 @@
 """Validation: validate raw country JSON and produce validated parquet using AWS Glue.
 
 Description:
-- Loads raw JSON from S3 and validates rows against schema
-- Checks required fields and business rules
+- Loads raw JSON from S3 and validates rows
 - Writes validated parquet output to S3
+- Moves processed raw files to raw_archive folder
 - Fully parameterized with config management
 
 Logs info and errors using JSON format for structured logging.
@@ -17,8 +17,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from config import get_config
 from utils.logger import setup_logger
+from utils.s3_utils import S3Utils
 
 logger = setup_logger(__name__)
 
@@ -177,6 +177,45 @@ def upload_ingestion_script(bucket_name):
 	else:
 		logger.info("Ingestion script not found at %s", local_path)
 
+def archive_raw_files(bucket_name, raw_zone="raw/countries"):
+	"""Move processed raw files to archive folder."""
+	try:
+		s3_utils = S3Utils()
+		
+		# List all files in raw zone
+		raw_files = s3_utils.list_objects(bucket_name, raw_zone)
+		
+		if not raw_files:
+			logger.info(f"No files to archive in {raw_zone}")
+			return True
+		
+		logger.info(f"Archiving {len(raw_files)} processed files")
+		
+		for obj in raw_files:
+			source_key = obj['Key']
+			
+			# Skip .keep placeholder files
+			if source_key.endswith('.keep'):
+				continue
+			
+			# Create archive key path
+			archive_key = source_key.replace(raw_zone, f"{raw_zone}_archive")
+			
+			# Copy to archive
+			if s3_utils.copy_object(bucket_name, source_key, bucket_name, archive_key):
+				# Delete original after successful copy
+				s3_utils.delete_object(bucket_name, source_key)
+				logger.info(f"✓ Archived: {source_key}")
+			else:
+				logger.warning(f"Failed to archive: {source_key}")
+		
+		logger.info(f"✓ Successfully archived all processed files")
+		return True
+	
+	except Exception as e:
+		logger.exception(f"Failed to archive raw files: {str(e)}")
+		return False
+
 def run_validation(bucket_name, raw_path, validated_path):
 	"""Run validation job on AWS Glue using PySpark."""
 	try:
@@ -203,8 +242,13 @@ def run_validation(bucket_name, raw_path, validated_path):
 		validated_df.write.mode("overwrite").parquet(validated_s3_path)
 		
 		record_count = validated_df.count()
-		logger.info(f"Validation completed successfully: {record_count} records")
+		logger.info(f"Validation completed: {record_count} records")
 		job.commit()
+		
+		# Archive processed raw files
+		logger.info("Archiving processed raw files...")
+		raw_zone = os.path.dirname(raw_path)
+		archive_raw_files(bucket_name, raw_zone)
 		
 		return record_count
 	except ImportError:
@@ -225,17 +269,24 @@ def run_validation_spark(bucket_name="data-pipeline-country-population", raw_pat
 		raw_s3_path = f"s3://{bucket_name}/{raw_path}"
 		validated_s3_path = f"s3://{bucket_name}/{validated_path}"
 		
-		logger.info("Reading raw data from %s", raw_s3_path)
+		logger.info(f"Reading raw data from {raw_s3_path}")
 		raw_df = spark.read.json(raw_s3_path)
 		
 		logger.info("Validating records with population > 0")
 		validated_df = raw_df.filter(col("population").isNotNull() & (col("population") > 0))
 		
-		logger.info("Writing validated data to %s", validated_s3_path)
+		logger.info(f"Writing validated data to {validated_s3_path}")
 		validated_df.write.mode("overwrite").parquet(validated_s3_path)
 		
-		logger.info("Validation completed successfully")
-		return validated_df.count()
+		record_count = validated_df.count()
+		logger.info(f"Validation completed: {record_count} records")
+		
+		# Archive processed raw files
+		logger.info("Archiving processed raw files...")
+		raw_zone = os.path.dirname(raw_path)
+		archive_raw_files(bucket_name, raw_zone)
+		
+		return record_count
 	except Exception:
 		logger.exception("Validation job failed")
 		raise

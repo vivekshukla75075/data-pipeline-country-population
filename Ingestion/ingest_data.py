@@ -1,9 +1,9 @@
 """Ingestion: fetch country data from REST Countries API and upload to S3.
 
 Description:
-- Fetches data from configurable API endpoint
-- Saves locally as JSON
-- Uploads to S3 raw zone with retry logic
+- Fetches data from https://restcountries.com/v3.1/all
+- Saves with timestamp filename
+- Uploads to S3 raw zone
 - Full error handling and logging
 
 Logs info and errors using JSON format for structured logging.
@@ -16,15 +16,13 @@ import sys
 import logging
 from datetime import datetime
 
-# Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from config import get_config
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-def fetch_from_api(url, timeout=30, retries=3, retry_delay=5):
+def fetch_from_api(url="https://restcountries.com/v3.1/all", timeout=30, retries=3, retry_delay=5):
 	"""Fetch country data from API with retry logic."""
 	import time
 	
@@ -62,39 +60,46 @@ def upload_to_s3(local_path, bucket_name, s3_key):
 		s3_client = boto3.client("s3")
 		s3_client.upload_file(local_path, bucket_name, s3_key)
 		logger.info(f"✓ Uploaded to S3: s3://{bucket_name}/{s3_key}")
+		return True
 	except Exception as e:
 		logger.exception(f"Failed to upload to S3: {str(e)}")
 		raise
 
+def generate_filename_with_timestamp():
+	"""Generate filename with date and time."""
+	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+	return f"countries_raw_{timestamp}.json"
+
 def main():
 	"""Main ingestion job."""
 	try:
-		config = get_config()
-		
 		# Get configuration
-		api_url = config.get("ingestion.api.url")
-		api_timeout = config.get("ingestion.api.timeout", 30)
-		api_retries = config.get("ingestion.api.retries", 3)
-		api_retry_delay = config.get("ingestion.api.retry_delay", 5)
-		bucket_name = os.environ.get("S3_BUCKET") or config.get("aws.s3_bucket")
-		raw_zone = config.get("s3.raw_zone")
-		output_file = config.get("ingestion.output_file")
+		api_url = os.environ.get("API_URL", "https://restcountries.com/v3.1/all")
+		api_timeout = int(os.environ.get("API_TIMEOUT", 30))
+		api_retries = int(os.environ.get("API_RETRIES", 3))
+		bucket_name = os.environ.get("S3_BUCKET", "data-pipeline-country-population")
+		raw_zone = os.environ.get("RAW_ZONE", "raw/countries")
 		
 		logger.info(f"Starting ingestion job for {api_url}")
 		
 		# Fetch data from API
-		data = fetch_from_api(api_url, api_timeout, api_retries, api_retry_delay)
+		data = fetch_from_api(api_url, api_timeout, api_retries)
 		logger.info(f"Fetched {len(data)} records from API")
 		
+		# Generate filename with timestamp
+		filename = generate_filename_with_timestamp()
+		local_path = f"raw_data/{filename}"
+		
 		# Save locally
-		local_path = f"raw_data/{output_file}"
 		save_to_local(data, local_path)
 		
 		# Upload to S3
-		s3_key = f"{raw_zone}/{output_file}"
+		s3_key = f"{raw_zone}/{filename}"
 		upload_to_s3(local_path, bucket_name, s3_key)
 		
-		logger.info("✓ Ingestion job completed successfully")
+		logger.info(f"✓ Ingestion job completed successfully")
+		logger.info(f"File: {filename}")
+		logger.info(f"Location: s3://{bucket_name}/{s3_key}")
 		return True
 	
 	except Exception as e:
