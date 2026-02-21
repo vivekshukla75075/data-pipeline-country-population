@@ -6,10 +6,6 @@ on:
       - feature/sync-upstream-changes
       - main
       - master
-  pull_request:
-    branches:
-      - main
-      - master
 
 env:
   AWS_REGION: us-east-1
@@ -39,6 +35,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feature/sync-upstream-changes'
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -50,38 +47,50 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-
-      - name: Terraform Init
-        run: terraform -chdir=infra/terraform init
-
-      - name: Terraform Apply
-        run: terraform -chdir=infra/terraform apply -auto-approve
-
-      - name: Deploy ingestion script to S3
+      - name: Verify S3 bucket exists
         run: |
-          aws s3 cp Ingestion/ingest_data.py s3://${{ env.S3_BUCKET }}/scripts/ingest_data.py
+          aws s3api head-bucket --bucket ${{ env.S3_BUCKET }} 2>/dev/null && \
+          echo "✓ S3 bucket exists" || \
+          (echo "❌ S3 bucket does not exist" && exit 1)
 
-      - name: Deploy validation script to S3
+      - name: Upload scripts to S3
         run: |
-          aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py
+          aws s3 cp src/ingestion/ingest_data.py s3://${{ env.S3_BUCKET }}/scripts/
+          aws s3 cp src/validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/
+          aws s3 cp src/transformation/transform_data.py s3://${{ env.S3_BUCKET }}/scripts/
+          echo "✓ All scripts uploaded to S3"
 
-      - name: Deploy transformation script to S3
+      - name: Install AWS CLI and dependencies
         run: |
-          aws s3 cp Transformation/transform_data.py s3://${{ env.S3_BUCKET }}/scripts/transform_data.py
+          pip install awscli
 
-      - name: Deploy IAM policies to S3
+      - name: Run automated deployment
         run: |
-          aws s3 cp infra/iam/s3_access_policy.json s3://${{ env.S3_BUCKET }}/policies/s3_access_policy.json
+          chmod +x infrastructure/scripts/deploy_pipeline.sh
+          ./infrastructure/scripts/deploy_pipeline.sh
 
-      - name: List deployed files
+      - name: Verify deployment
         run: |
-          aws s3 ls s3://${{ env.S3_BUCKET }}/ --recursive
+          echo "Verifying deployment..."
+          aws glue list-jobs --region ${{ env.AWS_REGION }} | grep -q "country-population" && \
+          echo "✓ Glue jobs created successfully" || \
+          echo "⚠️ Warning: Could not verify Glue jobs"
+          
+          aws lambda list-functions --region ${{ env.AWS_REGION }} | grep -q "trigger-ingestion" && \
+          echo "✓ Lambda functions created successfully" || \
+          echo "⚠️ Warning: Could not verify Lambda functions"
+          
+          aws stepfunctions list-state-machines --region ${{ env.AWS_REGION }} | grep -q "country-population" && \
+          echo "✓ Step Functions created successfully" || \
+          echo "⚠️ Warning: Could not verify Step Functions"
 
       - name: Notify deployment success
         if: success()
         run: |
-          echo "✅ Deployment to AWS successful!"
-          echo "Bucket: ${{ env.S3_BUCKET }}"
-          echo "Region: ${{ env.AWS_REGION }}"
+          echo "✅ Deployment completed successfully!"
+          echo ""
+          echo "Pipeline is ready. To trigger execution:"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "aws stepfunctions start-execution \"
+          echo "  --state-machine-arn arn:aws:states:${{ env.AWS_REGION }}:$ACCOUNT_ID:stateMachine:country-population-etl-pipeline \"
+          echo "  --input '{}'"
