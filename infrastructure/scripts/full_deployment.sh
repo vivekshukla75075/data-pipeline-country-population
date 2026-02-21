@@ -42,6 +42,15 @@ else
   exit 1
 fi
 
+# Step 3.5: Create Step Functions (NEW)
+echo -e "${YELLOW}[Step 3.5] Creating Step Functions State Machine...${NC}"
+if [ -f "infrastructure/scripts/create_step_functions.sh" ]; then
+  chmod +x infrastructure/scripts/create_step_functions.sh
+  ./infrastructure/scripts/create_step_functions.sh
+else
+  echo -e "${YELLOW}⚠️ Step Functions script not found${NC}"
+fi
+
 # Step 4: Upload sample data (optional)
 echo -e "${YELLOW}[Step 4] Creating sample data...${NC}"
 mkdir -p raw_data
