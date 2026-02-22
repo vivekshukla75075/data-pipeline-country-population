@@ -31,6 +31,27 @@ def ensure_s3_paths(bucket_name):
 		except Exception as e:
 			print(f"⚠️ Could not create path {path}: {str(e)}")
 
+def check_s3_data(bucket_name, path_prefix):
+	"""Check if data exists in S3 path."""
+	import boto3
+	s3_client = boto3.client("s3")
+	
+	try:
+		response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=path_prefix)
+		
+		if 'Contents' in response:
+			file_count = len(response['Contents'])
+			print(f"  Found {file_count} files in s3://{bucket_name}/{path_prefix}")
+			for obj in response['Contents']:
+				print(f"    - {obj['Key']}")
+			return True
+		else:
+			print(f"  No files found in s3://{bucket_name}/{path_prefix}")
+			return False
+	except Exception as e:
+		print(f"  Error checking path: {str(e)}")
+		return False
+
 try:
 	from awsglue.utils import getResolvedOptions
 	from awsglue.context import GlueContext
@@ -64,37 +85,74 @@ try:
 	print("Step 0: Ensuring S3 paths exist...")
 	ensure_s3_paths(bucket_name)
 	
-	# Step 1: Read validated data
-	print("Step 1: Reading validated data from S3...")
+	# Step 1: Check validated data exists
+	print("Step 1: Checking validated data in S3...")
 	validated_path = f"s3://{bucket_name}/{validated_zone}/"
+	print(f"  Checking: {validated_path}")
+	
+	data_exists = check_s3_data(bucket_name, validated_zone)
+	
+	if not data_exists:
+		print("⚠️ No validated data found!")
+		print("  Possible reasons:")
+		print("    1. Validation job has not completed yet")
+		print("    2. Validation job failed")
+		print("    3. Data was not uploaded to validated zone")
+		print("  Please run validation job first and wait for completion")
+		raise Exception("No validated data found in S3")
+	
+	# Step 2: Read validated data
+	print("Step 2: Reading validated data from S3...")
 	print(f"  Reading from: {validated_path}")
 	
 	try:
+		# Try reading as parquet first
 		validated_df = spark.read.parquet(validated_path)
 		record_count = validated_df.count()
-		print(f"✓ Read {record_count} validated records")
+		print(f"✓ Read {record_count} validated records (Parquet format)")
+	except Exception as e1:
+		print(f"  Parquet read failed: {str(e1)}")
+		print("  Trying JSON format...")
+		
+		try:
+			# Fallback to JSON if parquet fails
+			validated_df = spark.read.json(validated_path)
+			record_count = validated_df.count()
+			print(f"✓ Read {record_count} validated records (JSON format)")
+		except Exception as e2:
+			print(f"  JSON read also failed: {str(e2)}")
+			logger.exception("Data read errors:")
+			raise Exception(f"Could not read validated data: Parquet({e1}), JSON({e2})")
+	
+	if record_count == 0:
+		raise Exception("Validated data exists but contains 0 records")
+	
+	# Step 3: Transform data
+	print("Step 3: Transforming data...")
+	print(f"  Flattening nested columns...")
+	
+	try:
+		transformed_df = validated_df.select(
+			col("name.common").alias("country_name"),
+			col("region"),
+			col("subregion"),
+			col("population"),
+			col("area"),
+			coalesce(col("capital")[0], col("capital")).alias("capital_city"),
+			coalesce(col("currencies"), col("name.common")).alias("currency")
+		)
+		print(f"✓ Transformed {record_count} records")
+		print(f"  Schema: country_name, region, subregion, population, area, capital_city, currency")
 	except Exception as e:
-		print(f"⚠️ No validated data found or error reading: {str(e)}")
-		logger.exception("Validated data read error:")
-		sys.exit(1)
+		print(f"⚠️ Error transforming data: {str(e)}")
+		logger.exception("Transform error:")
+		raise
 	
-	# Step 2: Transform data
-	print("Step 2: Transforming data...")
-	transformed_df = validated_df.select(
-		col("name.common").alias("country_name"),
-		col("region"),
-		col("subregion"),
-		col("population"),
-		col("area"),
-		coalesce(col("capital")[0], col("capital")).alias("capital_city"),
-		coalesce(col("currencies"), col("name.common")).alias("currency")
-	)
-	print(f"✓ Transformed {record_count} records")
-	
-	# Step 3: Write curated data (partitioned by region)
-	print("Step 3: Writing curated data to S3 (partitioned by region)...")
+	# Step 4: Write curated data (partitioned by region)
+	print("Step 4: Writing curated data to S3 (partitioned by region)...")
 	curated_path = f"s3://{bucket_name}/{curated_zone}/"
 	print(f"  Writing to: {curated_path}")
+	print(f"  Partitioning by: region")
 	
 	try:
 		transformed_df.write \
@@ -104,7 +162,8 @@ try:
 			.partitionBy("region") \
 			.save(curated_path)
 		
-		print(f"✓ Written {record_count} records to {curated_path} (partitioned by region)")
+		print(f"✓ Written {record_count} records to {curated_path}")
+		print(f"✓ Data partitioned by region")
 	except Exception as e:
 		print(f"⚠️ Error writing curated data: {str(e)}")
 		logger.exception("Write error:")
@@ -115,10 +174,18 @@ try:
 	print("=" * 60)
 	print(f"Summary:")
 	print(f"  Records transformed: {record_count}")
-	print(f"  Output partitioned by: region")
+	print(f"  Output location: s3://{bucket_name}/{curated_zone}/")
+	print(f"  Partitioned by: region")
 	
 	job.commit()
 	print("✓ Glue job committed")
+	
+	print("=" * 60)
+	print("NEXT STEPS:")
+	print("  1. Check curated data in S3")
+	print("  2. Query via Athena:")
+	print("     SELECT region, COUNT(*) FROM country_population.countries_curated GROUP BY region;")
+	print("=" * 60)
 
 except Exception as e:
 	print("=" * 60)
@@ -127,4 +194,12 @@ except Exception as e:
 	import traceback
 	traceback.print_exc()
 	logger.exception("Transformation job failed:")
+	
+	print("")
+	print("TROUBLESHOOTING:")
+	print("  1. Check if validation job completed successfully")
+	print("  2. Verify validated data exists in S3: s3://data-pipeline-country-population/validated/countries/")
+	print("  3. Check Glue job logs in CloudWatch")
+	print("  4. Run validation job again if data is missing")
+	
 	sys.exit(1)
