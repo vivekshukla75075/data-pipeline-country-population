@@ -41,7 +41,6 @@ def lambda_handler(event, context):
 		api_error = None
 		
 		try:
-			# Create request with proper headers
 			req = urllib.request.Request(
 				api_url,
 				headers={
@@ -63,7 +62,6 @@ def lambda_handler(event, context):
 		except urllib.error.HTTPError as e:
 			api_error = f"HTTP Error {e.code}: {e.reason}"
 			log_messages.append(f"✗ HTTP Error {e.code}: {e.reason}")
-			log_messages.append(f"  Response: {e.read().decode('utf-8')[:200]}")
 			
 		except urllib.error.URLError as e:
 			api_error = f"URL Error: {str(e)}"
@@ -73,56 +71,16 @@ def lambda_handler(event, context):
 			api_error = f"Error: {str(e)}"
 			log_messages.append(f"✗ Error: {str(e)}")
 		
-		# If API fails, use fallback (but log it)
+		# If API fails, use fallback
 		if data is None:
 			log_messages.append("")
 			log_messages.append("Fallback: Using sample data...")
 			data = [
-				{
-					"name": {"common": "United States", "official": "United States of America"},
-					"region": "Americas",
-					"subregion": "Northern America",
-					"population": 331900000,
-					"area": 9833517,
-					"capital": ["Washington, D.C."],
-					"currencies": {"USD": {"name": "US Dollar"}}
-				},
-				{
-					"name": {"common": "India", "official": "Republic of India"},
-					"region": "Asia",
-					"subregion": "South Asia",
-					"population": 1380004385,
-					"area": 3287263,
-					"capital": ["New Delhi"],
-					"currencies": {"INR": {"name": "Indian Rupee"}}
-				},
-				{
-					"name": {"common": "Germany", "official": "Federal Republic of Germany"},
-					"region": "Europe",
-					"subregion": "Western Europe",
-					"population": 83370000,
-					"area": 357022,
-					"capital": ["Berlin"],
-					"currencies": {"EUR": {"name": "Euro"}}
-				},
-				{
-					"name": {"common": "Brazil", "official": "Federative Republic of Brazil"},
-					"region": "Americas",
-					"subregion": "South America",
-					"population": 215000000,
-					"area": 8514877,
-					"capital": ["Brasília"],
-					"currencies": {"BRL": {"name": "Brazilian Real"}}
-				},
-				{
-					"name": {"common": "Nigeria", "official": "Federal Republic of Nigeria"},
-					"region": "Africa",
-					"subregion": "West Africa",
-					"population": 223800000,
-					"area": 923768,
-					"capital": ["Abuja"],
-					"currencies": {"NGN": {"name": "Nigerian Naira"}}
-				}
+				{"name": {"common": "United States"}, "region": "Americas", "subregion": "Northern America", "population": 331900000, "area": 9833517, "capital": ["Washington, D.C."], "currencies": {"USD": {"name": "US Dollar"}}},
+				{"name": {"common": "India"}, "region": "Asia", "subregion": "South Asia", "population": 1380004385, "area": 3287263, "capital": ["New Delhi"], "currencies": {"INR": {"name": "Indian Rupee"}}},
+				{"name": {"common": "Germany"}, "region": "Europe", "subregion": "Western Europe", "population": 83370000, "area": 357022, "capital": ["Berlin"], "currencies": {"EUR": {"name": "Euro"}}},
+				{"name": {"common": "Brazil"}, "region": "Americas", "subregion": "South America", "population": 215000000, "area": 8514877, "capital": ["Brasília"], "currencies": {"BRL": {"name": "Brazilian Real"}}},
+				{"name": {"common": "Nigeria"}, "region": "Africa", "subregion": "West Africa", "population": 223800000, "area": 923768, "capital": ["Abuja"], "currencies": {"NGN": {"name": "Nigerian Naira"}}}
 			]
 			log_messages.append(f"✓ Using {len(data)} sample records")
 		
@@ -198,7 +156,6 @@ def lambda_handler(event, context):
 		import traceback
 		log_messages.append(traceback.format_exc())
 		
-		# Write error log
 		log_content = "\n".join(log_messages)
 		s3_client.put_object(
 			Bucket=log_bucket,
