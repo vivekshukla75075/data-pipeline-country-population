@@ -52,7 +52,8 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 		print("=" * 60)
 		
 		# Import Glue/Spark only when needed
-		from pyspark.sql.functions import col
+		from pyspark.sql.functions import col, from_json, schema_of_json
+		from pyspark.sql.types import StructType, ArrayType
 		import boto3
 		
 		if IS_GLUE and glue_context:
@@ -86,13 +87,44 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 		print(f"  Reading from: {raw_path}")
 		
 		try:
-			raw_df = spark.read.json(raw_path)
+			# Try reading JSON with multiline option to handle pretty-printed JSON
+			raw_df = spark.read.option("multiline", "true").json(raw_path)
+			
+			# Check if we got corrupted records
+			if "_corrupt_record" in raw_df.columns:
+				print("Warning: Found corrupted records, attempting to parse JSON array...")
+				log_messages.append("Warning: Found corrupted records, attempting to parse JSON array...")
+				
+				# Read the entire file as text
+				text_df = spark.read.text(raw_path)
+				
+				# Join all lines and parse as JSON
+				import json
+				json_content = ""
+				for row in text_df.collect():
+					json_content += row[0]
+				
+				# Parse JSON
+				data = json.loads(json_content)
+				
+				# Convert to DataFrame
+				raw_df = spark.createDataFrame(data)
+				print(f"✓ Successfully parsed JSON array")
+				log_messages.append(f"✓ Successfully parsed JSON array")
+			
 			record_count_raw = raw_df.count()
 			log_messages.append(f"✓ Read {record_count_raw} raw records")
 			print(f"✓ Read {record_count_raw} raw records")
+			
+			# Show schema
+			print("Schema:")
+			raw_df.printSchema()
+			log_messages.append("Schema:")
+			log_messages.append(raw_df.schema.json())
+			
 		except Exception as e:
-			log_messages.append(f"⚠️ No raw data found or error reading: {str(e)}")
-			print(f"⚠️ No raw data found or error reading: {str(e)}")
+			log_messages.append(f"⚠️ Error reading raw data: {str(e)}")
+			print(f"⚠️ Error reading raw data: {str(e)}")
 			logger.exception("Raw data read error:")
 			
 			# Write log before returning
@@ -110,10 +142,17 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 		# Step 2: Validate data
 		log_messages.append("Step 2: Validating data (population > 0)...")
 		print("Step 2: Validating data (population > 0)...")
-		validated_df = raw_df.filter(col("population").isNotNull() & (col("population") > 0))
-		record_count_validated = validated_df.count()
-		log_messages.append(f"✓ Validated {record_count_validated} records (filtered from {record_count_raw})")
-		print(f"✓ Validated {record_count_validated} records (filtered from {record_count_raw})")
+		
+		try:
+			validated_df = raw_df.filter((col("population").isNotNull()) & (col("population") > 0))
+			record_count_validated = validated_df.count()
+			log_messages.append(f"✓ Validated {record_count_validated} records (filtered from {record_count_raw})")
+			print(f"✓ Validated {record_count_validated} records (filtered from {record_count_raw})")
+		except Exception as e:
+			log_messages.append(f"Error filtering data: {str(e)}")
+			print(f"Error filtering data: {str(e)}")
+			raise
+		
 		log_messages.append("")
 		
 		# Step 3: Write validated data
@@ -219,7 +258,6 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 		print("=" * 60)
 		print(f"ERROR: {str(e)}")
 		print("=" * 60)
-		import traceback
 		traceback.print_exc()
 		
 		# Write error log
