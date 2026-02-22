@@ -26,28 +26,38 @@ wheels/
 htmlcov/
 .tox/
 
-# IDEs
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Environment
-.env
-.venv
-env/
-venv/
-ENV/
-
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
+# Project specific
+.env
+.env.local
 *.log
-logs/
+response.json
+/tmp/
 
-# AWS
-*.pem
-.aws/
+# Terraform (not used)
+infra/terraform/.terraform/
+infra/terraform/*.tfstate*
+infra/terraform/.terraform.lock.hcl
+
+# Old directories
+Ingestion/
+tests/
+old_*/
+
+# Keep only essential
+!lambda_deployment/
+!Validation/
+!Transformation/
+!infrastructure/
+!docs/
+!.github/
