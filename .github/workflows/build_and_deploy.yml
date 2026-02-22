@@ -22,12 +22,12 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.9
+          python-version: '3.9'
 
       - name: Install dependencies
         run: |
@@ -45,14 +45,16 @@ jobs:
           cd lambda_deployment
           rm -f ingest_api_data.zip
           zip -q ingest_api_data.zip ingest_api_data.py
+          ls -lh ingest_api_data.zip
           cd ..
           echo "✓ Lambda ZIP created"
 
       - name: Upload Lambda artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: lambda-deployment
           path: lambda_deployment/ingest_api_data.zip
+          retention-days: 1
 
   deploy:
     name: Deploy to AWS
@@ -62,20 +64,26 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Download Lambda artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: lambda-deployment
           path: lambda_deployment
+
+      - name: Verify Lambda artifact
+        run: |
+          echo "Verifying Lambda artifact..."
+          ls -lh lambda_deployment/ingest_api_data.zip
+          unzip -l lambda_deployment/ingest_api_data.zip
 
       - name: Deploy Lambda function
         run: |
@@ -94,7 +102,13 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --query 'Configuration.LastModified' \
             --output text)
+          CODE_SIZE=$(aws lambda get-function \
+            --function-name ingest-api-data \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Configuration.CodeSize' \
+            --output text)
           echo "Lambda Last Modified: $LAST_MODIFIED"
+          echo "Lambda Code Size: $CODE_SIZE bytes"
           echo "✓ Lambda deployment verified"
 
       - name: Upload Glue scripts to S3
@@ -140,14 +154,15 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             /tmp/lambda_response.json
           
-          STATUS=$(cat /tmp/lambda_response.json | grep -o '"statusCode": [0-9]*' | grep -o '[0-9]*')
+          cat /tmp/lambda_response.json | jq '.'
+          
+          STATUS=$(cat /tmp/lambda_response.json | jq -r '.statusCode')
           echo "Lambda Status Code: $STATUS"
           
           if [ "$STATUS" = "200" ]; then
             echo "✓ Lambda execution successful"
           else
             echo "✗ Lambda execution failed"
-            cat /tmp/lambda_response.json
             exit 1
           fi
 
@@ -155,31 +170,35 @@ jobs:
         run: |
           echo "Verifying S3 deployment..."
           
-          echo "Checking Glue scripts..."
+          echo ""
+          echo "Glue scripts:"
           aws s3 ls s3://${{ env.S3_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}
           
-          echo "Checking raw data..."
-          aws s3 ls s3://${{ env.S3_BUCKET }}/raw/countries/ --region ${{ env.AWS_REGION }} --recursive || echo "Raw data folder empty (will be created by Lambda)"
+          echo ""
+          echo "Raw data:"
+          aws s3 ls s3://${{ env.S3_BUCKET }}/raw/countries/ --region ${{ env.AWS_REGION }} --recursive || echo "(will be created by Lambda)"
           
-          echo "Checking logs..."
-          aws s3 ls s3://${{ env.S3_BUCKET }}/logs/ingestion_logs/ --region ${{ env.AWS_REGION }} --recursive || echo "Logs will appear after first execution"
+          echo ""
+          echo "Ingestion logs:"
+          aws s3 ls s3://${{ env.S3_BUCKET }}/logs/ingestion_logs/ --region ${{ env.AWS_REGION }} --recursive || echo "(will appear after execution)"
 
       - name: Deployment summary
         run: |
           echo ""
           echo "========== DEPLOYMENT SUMMARY =========="
-          echo "✅ Lambda function: ingest-api-data (DEPLOYED)"
-          echo "✅ Glue job: country-population-validation (UPDATED)"
-          echo "✅ Glue job: country-population-transformation (UPDATED)"
+          echo "✅ Lambda function: ingest-api-data"
+          echo "✅ Glue job: country-population-validation"
+          echo "✅ Glue job: country-population-transformation"
           echo "✅ Scripts: Uploaded to S3"
           echo ""
-          echo "Pipeline is ready for execution:"
-          echo "  1. Lambda will fetch API data and write to raw/countries/"
-          echo "  2. Validation job will process and write to validated/countries/"
-          echo "  3. Transformation job will create curated/countries/"
+          echo "Pipeline Components:"
+          echo "  1. Lambda (Ingestion) - DEPLOYED"
+          echo "  2. Glue Validation - DEPLOYED"
+          echo "  3. Glue Transformation - DEPLOYED"
           echo ""
-          echo "Check logs in:"
+          echo "Log Locations:"
           echo "  - s3://data-pipeline-country-population/logs/ingestion_logs/"
           echo "  - s3://data-pipeline-country-population/logs/validation_logs/"
           echo "  - s3://data-pipeline-country-population/logs/transformation_logs/"
-          echo "=========================================="
+          echo ""
+          echo "==========================================
