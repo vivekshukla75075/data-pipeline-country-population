@@ -106,27 +106,17 @@ try:
 	print("Step 3: Transforming data...")
 	log_messages.append("Step 3: Transforming data...")
 	
-	try:
-		transformed_df = validated_df.select(
-			col("name.common").alias("country_name"),
-			col("region"),
-			col("subregion"),
-			col("population"),
-			col("area"),
-			coalesce(col("capital")[0], col("capital")).alias("capital_city"),
-			coalesce(col("currencies"), col("name.common")).alias("currency")
-		)
-		print(f"✓ Transformed {record_count} records")
-		log_messages.append(f"✓ Transformed {record_count} records")
-		print(f"  Schema: country_name, region, subregion, population, area, capital_city, currency")
-		log_messages.append(f"  Schema: country_name, region, subregion, population, area, capital_city, currency")
-	except Exception as e:
-		error_msg = f"Error transforming data: {str(e)}"
-		print(error_msg)
-		log_messages.append(error_msg)
-		logger.exception("Transform error:")
-		raise
-	
+	transformed_df = validated_df.select(
+		col("name.common").alias("country_name"),
+		col("region"),
+		col("subregion"),
+		col("population"),
+		col("area"),
+		coalesce(col("capital")[0], col("capital")).alias("capital_city"),
+		coalesce(col("currencies"), col("name.common")).alias("currency")
+	)
+	print(f"✓ Transformed {record_count} records")
+	log_messages.append(f"✓ Transformed {record_count} records")
 	log_messages.append("")
 	
 	# Step 4: Write curated data
