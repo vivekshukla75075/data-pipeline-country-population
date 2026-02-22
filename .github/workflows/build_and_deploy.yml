@@ -160,7 +160,7 @@ jobs:
           
           print("Updating Glue Validation job...")
           glue.update_job(
-              Name='country-population-validation',
+              JobName='country-population-validation',
               JobUpdate={
                   'Command': {'Name': 'glueetl', 'ScriptLocation': 's3://${{ env.S3_BUCKET }}/scripts/validate_schema.py'},
                   'Role': role_arn,
@@ -173,7 +173,7 @@ jobs:
           
           print("Updating Glue Transformation job...")
           glue.update_job(
-              Name='country-population-transformation',
+              JobName='country-population-transformation',
               JobUpdate={
                   'Command': {'Name': 'glueetl', 'ScriptLocation': 's3://${{ env.S3_BUCKET }}/scripts/transform_data.py'},
                   'Role': role_arn,
