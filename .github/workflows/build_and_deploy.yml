@@ -228,38 +228,50 @@ jobs:
         run: |
           echo "Updating Glue Validation job..."
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          
+          cat > /tmp/validation_update.json << EOF
+          {
+            "Command": {
+              "Name": "glueetl",
+              "ScriptLocation": "s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py"
+            },
+            "Role": "arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role",
+            "GlueVersion": "3.0",
+            "WorkerType": "G.1X",
+            "NumberOfWorkers": 3
+          }
+          EOF
+          
           aws glue update-job \
             --name country-population-validation \
-            --job-update '{
-              "Command": {
-                "Name": "glueetl",
-                "ScriptLocation": "s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py"
-              },
-              "Role": "arn:aws:iam::'"${ACCOUNT_ID}"':role/glue-validation-role",
-              "GlueVersion": "3.0",
-              "WorkerType": "G.1X",
-              "NumberOfWorkers": 3
-            }' \
+            --job-update file:///tmp/validation_update.json \
             --region ${{ env.AWS_REGION }}
+          
           echo "✓ Validation job updated"
 
       - name: Update Glue Transformation job
         run: |
           echo "Updating Glue Transformation job..."
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          
+          cat > /tmp/transformation_update.json << EOF
+          {
+            "Command": {
+              "Name": "glueetl",
+              "ScriptLocation": "s3://${{ env.S3_BUCKET }}/scripts/transform_data.py"
+            },
+            "Role": "arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role",
+            "GlueVersion": "3.0",
+            "WorkerType": "G.1X",
+            "NumberOfWorkers": 5
+          }
+          EOF
+          
           aws glue update-job \
             --name country-population-transformation \
-            --job-update '{
-              "Command": {
-                "Name": "glueetl",
-                "ScriptLocation": "s3://${{ env.S3_BUCKET }}/scripts/transform_data.py"
-              },
-              "Role": "arn:aws:iam::'"${ACCOUNT_ID}"':role/glue-validation-role",
-              "GlueVersion": "3.0",
-              "WorkerType": "G.1X",
-              "NumberOfWorkers": 5
-            }' \
+            --job-update file:///tmp/transformation_update.json \
             --region ${{ env.AWS_REGION }}
+          
           echo "✓ Transformation job updated"
 
       - name: Test Lambda execution
