@@ -26,6 +26,7 @@ try:
 	from pyspark.context import SparkContext
 	from pyspark.sql.functions import col, coalesce
 	import boto3
+	import json
 	
 	print("✓ Glue imports successful")
 	log_messages.append("✓ Glue imports successful")
@@ -64,14 +65,51 @@ try:
 	s3_client = boto3.client("s3")
 	response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=validated_zone)
 	
-	if 'Contents' not in response:
+	parquet_files = []
+	if 'Contents' in response:
+		parquet_files = [obj for obj in response['Contents'] if obj['Key'].endswith('.parquet')]
+	
+	if not parquet_files:
 		error_msg = "No validated data found!"
 		print(error_msg)
 		log_messages.append(error_msg)
-		raise Exception(error_msg)
+		log_messages.append("")
+		log_messages.append("Available files in validated zone:")
+		if 'Contents' in response:
+			for obj in response['Contents']:
+				log_messages.append(f"  - {obj['Key']}")
+				print(f"  - {obj['Key']}")
+		else:
+			log_messages.append("  (no files found)")
+			print("  (no files found)")
+		
+		log_messages.append("")
+		log_messages.append("Checking for JSON files in validated zone...")
+		print("Checking for JSON files in validated zone...")
+		json_files = [obj for obj in response.get('Contents', []) if obj['Key'].endswith('.json')]
+		if json_files:
+			log_messages.append("Found JSON files, attempting to read...")
+			print("Found JSON files, attempting to read...")
+			for f in json_files:
+				log_messages.append(f"  - {f['Key']}")
+				print(f"  - {f['Key']}")
+		
+		log_messages.append("")
+		log_messages.append("Checking raw data in case validation didn't run...")
+		print("Checking raw data in case validation didn't run...")
+		raw_response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix="raw/countries")
+		if 'Contents' in raw_response:
+			for obj in raw_response['Contents']:
+				log_messages.append(f"  Raw: {obj['Key']}")
+				print(f"  Raw: {obj['Key']}")
+		
+		raise Exception("No validated Parquet data found. Please ensure validation job completed successfully.")
 	
-	print(f"✓ Found validated data files")
-	log_messages.append(f"✓ Found validated data files")
+	print(f"✓ Found {len(parquet_files)} Parquet files")
+	log_messages.append(f"✓ Found {len(parquet_files)} Parquet files")
+	for f in parquet_files:
+		print(f"  - {f['Key']}")
+		log_messages.append(f"  - {f['Key']}")
 	log_messages.append("")
 	
 	# Step 2: Read validated data
@@ -85,20 +123,12 @@ try:
 		record_count = validated_df.count()
 		print(f"✓ Read {record_count} validated records (Parquet format)")
 		log_messages.append(f"✓ Read {record_count} validated records (Parquet format)")
+		print("Schema:")
+		validated_df.printSchema()
 	except Exception as e1:
-		print(f"  Parquet read failed, trying JSON...")
-		log_messages.append(f"  Parquet read failed, trying JSON...")
-		
-		try:
-			validated_df = spark.read.json(validated_path)
-			record_count = validated_df.count()
-			print(f"✓ Read {record_count} validated records (JSON format)")
-			log_messages.append(f"✓ Read {record_count} validated records (JSON format)")
-		except Exception as e2:
-			error_msg = f"Could not read validated data"
-			print(error_msg)
-			log_messages.append(error_msg)
-			raise Exception(error_msg)
+		print(f"  Parquet read failed: {str(e1)}")
+		log_messages.append(f"  Parquet read failed: {str(e1)}")
+		raise
 	
 	log_messages.append("")
 	
@@ -106,17 +136,24 @@ try:
 	print("Step 3: Transforming data...")
 	log_messages.append("Step 3: Transforming data...")
 	
-	transformed_df = validated_df.select(
-		col("name.common").alias("country_name"),
-		col("region"),
-		col("subregion"),
-		col("population"),
-		col("area"),
-		coalesce(col("capital")[0], col("capital")).alias("capital_city"),
-		coalesce(col("currencies"), col("name.common")).alias("currency")
-	)
-	print(f"✓ Transformed {record_count} records")
-	log_messages.append(f"✓ Transformed {record_count} records")
+	try:
+		transformed_df = validated_df.select(
+			col("name.common").alias("country_name"),
+			col("region"),
+			col("subregion"),
+			col("population"),
+			col("area"),
+			coalesce(col("capital")[0], col("capital")).alias("capital_city"),
+			coalesce(col("currencies"), col("name.common")).alias("currency")
+		)
+		print(f"✓ Transformed {record_count} records")
+		log_messages.append(f"✓ Transformed {record_count} records")
+	except Exception as e:
+		print(f"⚠️ Error transforming data: {str(e)}")
+		log_messages.append(f"⚠️ Error transforming data: {str(e)}")
+		logger.exception("Transform error:")
+		raise
+	
 	log_messages.append("")
 	
 	# Step 4: Write curated data
@@ -126,17 +163,23 @@ try:
 	print(f"  Writing to: {curated_path}")
 	log_messages.append(f"  Writing to: {curated_path}")
 	
-	transformed_df.write \
-		.mode("overwrite") \
-		.format("parquet") \
-		.option("compression", "snappy") \
-		.partitionBy("region") \
-		.save(curated_path)
+	try:
+		transformed_df.write \
+			.mode("overwrite") \
+			.format("parquet") \
+			.option("compression", "snappy") \
+			.partitionBy("region") \
+			.save(curated_path)
+		
+		print(f"✓ Written {record_count} records to {curated_path}")
+		log_messages.append(f"✓ Written {record_count} records to {curated_path}")
+	except Exception as e:
+		print(f"⚠️ Error writing curated data: {str(e)}")
+		log_messages.append(f"⚠️ Error writing curated data: {str(e)}")
+		logger.exception("Write error:")
+		raise
 	
-	print(f"✓ Written {record_count} records to {curated_path}")
-	log_messages.append(f"✓ Written {record_count} records to {curated_path}")
 	log_messages.append("")
-	
 	log_messages.append("=" * 60)
 	log_messages.append("END: TRANSFORMATION JOB - SUCCESS")
 	log_messages.append("=" * 60)
@@ -173,11 +216,14 @@ except Exception as e:
 	traceback.print_exc()
 	
 	log_content = "\n".join(log_messages)
-	s3_client = boto3.client("s3")
-	s3_client.put_object(
-		Bucket=bucket_name,
-		Key=f"logs/transformation_logs/transformation_error_{execution_timestamp}.log",
-		Body=log_content.encode('utf-8')
-	)
+	try:
+		s3_client = boto3.client("s3")
+		s3_client.put_object(
+			Bucket=bucket_name,
+			Key=f"logs/transformation_logs/transformation_error_{execution_timestamp}.log",
+			Body=log_content.encode('utf-8')
+		)
+	except:
+		pass
 	
 	sys.exit(1)
