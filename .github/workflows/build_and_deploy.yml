@@ -85,9 +85,89 @@ jobs:
           ls -lh lambda_deployment/ingest_api_data.zip
           unzip -l lambda_deployment/ingest_api_data.zip
 
-      - name: Deploy Lambda function
+      - name: Create Lambda function if not exists
         run: |
-          echo "Deploying Lambda function..."
+          echo "Checking if Lambda function exists..."
+          FUNCTION_EXISTS=$(aws lambda get-function --function-name ingest-api-data --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
+          
+          if [ -z "$FUNCTION_EXISTS" ]; then
+            echo "Lambda function not found. Creating it..."
+            
+            # Get Account ID
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            ROLE_NAME="lambda-execution-role"
+            
+            # Check if role exists
+            ROLE_EXISTS=$(aws iam get-role --role-name $ROLE_NAME 2>/dev/null || echo "")
+            
+            if [ -z "$ROLE_EXISTS" ]; then
+              echo "Creating IAM role: $ROLE_NAME"
+              aws iam create-role \
+                --role-name $ROLE_NAME \
+                --assume-role-policy-document '{
+                  "Version": "2012-10-17",
+                  "Statement": [
+                    {
+                      "Effect": "Allow",
+                      "Principal": {"Service": "lambda.amazonaws.com"},
+                      "Action": "sts:AssumeRole"
+                    }
+                  ]
+                }'
+              
+              # Wait for role to be available
+              sleep 2
+              
+              # Attach S3 policy
+              echo "Attaching S3 policy to role..."
+              aws iam put-role-policy \
+                --role-name $ROLE_NAME \
+                --policy-name S3AccessPolicy \
+                --policy-document '{
+                  "Version": "2012-10-17",
+                  "Statement": [
+                    {
+                      "Effect": "Allow",
+                      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+                      "Resource": ["arn:aws:s3:::${{ env.S3_BUCKET }}/*", "arn:aws:s3:::${{ env.S3_BUCKET }}"]
+                    }
+                  ]
+                }'
+              
+              # Attach basic Lambda execution policy
+              echo "Attaching basic Lambda execution policy..."
+              aws iam attach-role-policy \
+                --role-name $ROLE_NAME \
+                --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+            else
+              echo "Role already exists: $ROLE_NAME"
+            fi
+            
+            # Wait for permissions to propagate
+            sleep 5
+            
+            # Create Lambda function
+            echo "Creating Lambda function: ingest-api-data"
+            ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+            
+            aws lambda create-function \
+              --function-name ingest-api-data \
+              --runtime python3.9 \
+              --role $ROLE_ARN \
+              --handler ingest_api_data.lambda_handler \
+              --zip-file fileb://lambda_deployment/ingest_api_data.zip \
+              --timeout 60 \
+              --memory-size 256 \
+              --region ${{ env.AWS_REGION }}
+            
+            echo "✓ Lambda function created"
+          else
+            echo "✓ Lambda function already exists"
+          fi
+
+      - name: Deploy Lambda function code
+        run: |
+          echo "Deploying Lambda function code..."
           aws lambda update-function-code \
             --function-name ingest-api-data \
             --zip-file fileb://lambda_deployment/ingest_api_data.zip \
@@ -201,4 +281,4 @@ jobs:
           echo "  - s3://data-pipeline-country-population/logs/validation_logs/"
           echo "  - s3://data-pipeline-country-population/logs/transformation_logs/"
           echo ""
-          echo "==========================================
+          echo "=========================================="
