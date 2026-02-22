@@ -224,109 +224,84 @@ jobs:
           aws s3 cp Transformation/transform_data.py s3://${{ env.S3_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}
           echo "✓ Glue scripts uploaded"
 
-      - name: Update Glue Validation job
+      - name: Update Glue jobs
         run: |
-          echo "Updating Glue Validation job..."
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          python3 << 'EOF'
+          import boto3
+          import json
           
-          cat > /tmp/validation_update.json << EOF
-          {
-            "Command": {
-              "Name": "glueetl",
-              "ScriptLocation": "s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py"
-            },
-            "Role": "arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role",
-            "GlueVersion": "3.0",
-            "WorkerType": "G.1X",
-            "NumberOfWorkers": 3
-          }
+          glue = boto3.client('glue', region_name='${{ env.AWS_REGION }}') --job-name country-population-validation \
+          sts = boto3.client('sts') Command='{Name=glueetl,ScriptLocation=s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py}',Role=arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role,GlueVersion=3.0,WorkerType=G.1X,NumberOfWorkers=3 \
+          _REGION }}
+          account_id = sts.get_caller_identity()['Account']
+          role_arn = f'arn:aws:iam::{account_id}:role/glue-validation-role' "✓ Validation job updated"
+          
+          # Update Validation jobrmation job
+          print("Updating Glue Validation job...")
+          glue.update_job(ansformation job..."
+              Name='country-population-validation',CCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+              JobUpdate={
+                  'Command': {aws glue update-job \
+                      'Name': 'glueetl',population-transformation \
+                      'ScriptLocation': 's3://${{ env.S3_BUCKET }}/scripts/validate_schema.py'riptLocation=s3://${{ env.S3_BUCKET }}/scripts/transform_data.py}',Role=arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role,GlueVersion=3.0,WorkerType=G.1X,NumberOfWorkers=5 \
+                  },
+                  'Role': role_arn,
+                  'GlueVersion': '3.0',echo "✓ Transformation job updated"
+                  'WorkerType': 'G.1X',
+                  'NumberOfWorkers': 3      - name: Test Lambda execution
+              }
+          ) "Testing Lambda execution..."
+          print("✓ Validation job updated")
+          
+          # Update Transformation job  --region ${{ env.AWS_REGION }} \
+          print("Updating Glue Transformation job...")
+          glue.update_job(
+              Name='country-population-transformation',a_response.json | jq '.'
+              JobUpdate={
+                  'Command': {
+                      'Name': 'glueetl', "Lambda Status Code: $STATUS"
+                      'ScriptLocation': 's3://${{ env.S3_BUCKET }}/scripts/transform_data.py'
+                  },]; then
+                  'Role': role_arn,ion successful"
+                  'GlueVersion': '3.0',
+                  'WorkerType': 'G.1X', echo "✗ Lambda execution failed"
+                  'NumberOfWorkers': 5xit 1
+              }fi
+          )
+          print("✓ Transformation job updated")
           EOF
-          
-          aws glue update-job \
-            --name country-population-validation \
-            --job-update file:///tmp/validation_update.json \
-            --region ${{ env.AWS_REGION }}
-          
-          echo "✓ Validation job updated"
-
-      - name: Update Glue Transformation job
-        run: |
-          echo "Updating Glue Transformation job..."
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          
-          cat > /tmp/transformation_update.json << EOF
-          {
-            "Command": {
-              "Name": "glueetl",
-              "ScriptLocation": "s3://${{ env.S3_BUCKET }}/scripts/transform_data.py"
-            },
-            "Role": "arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role",
-            "GlueVersion": "3.0",
-            "WorkerType": "G.1X",
-            "NumberOfWorkers": 5
-          }
-          EOF
-          
-          aws glue update-job \
-            --name country-population-transformation \
-            --job-update file:///tmp/transformation_update.json \
-            --region ${{ env.AWS_REGION }}
-          
-          echo "✓ Transformation job updated"
-
+"
       - name: Test Lambda execution
         run: |
-          echo "Testing Lambda execution..."
-          aws lambda invoke \
+          echo "Testing Lambda execution..."          echo "Glue scripts:"
+          aws lambda invoke \_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}
             --function-name ingest-api-data \
             --region ${{ env.AWS_REGION }} \
             /tmp/lambda_response.json
-          
+          /raw/countries/ --region ${{ env.AWS_REGION }} --recursive || echo "(will be created by Lambda)"
           cat /tmp/lambda_response.json | jq '.'
           
-          STATUS=$(cat /tmp/lambda_response.json | jq -r '.statusCode')
-          echo "Lambda Status Code: $STATUS"
+          STATUS=$(cat /tmp/lambda_response.json | jq -r '.statusCode')echo "Ingestion logs:"
+          echo "Lambda Status Code: $STATUS"gs/ingestion_logs/ --region ${{ env.AWS_REGION }} --recursive || echo "(will appear after execution)"
           
           if [ "$STATUS" = "200" ]; then
             echo "✓ Lambda execution successful"
-          else
-            echo "✗ Lambda execution failed"
-            exit 1
-          fi
-
-      - name: Verify S3 deployment
-        run: |
-          echo "Verifying S3 deployment..."
-          
-          echo ""
-          echo "Glue scripts:"
-          aws s3 ls s3://${{ env.S3_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}
-          
-          echo ""
+          elseecho ""
+            echo "✗ Lambda execution failed"MMARY =========="
+            exit 1ta"
+          fi "✅ Glue job: country-population-validation"
+on-transformation"
+      - name: Verify S3 deploymentScripts: Uploaded to S3"
+        run: |ho ""
+          echo "Verifying S3 deployment..."          echo "Pipeline Components:"
+          tion) - DEPLOYED"
+          echo "" "  2. Glue Validation - DEPLOYED"
+          echo "Glue scripts:"DEPLOYED"
+          aws s3 ls s3://${{ env.S3_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}echo ""
+          og Locations:"
+          echo ""pipeline-country-population/logs/ingestion_logs/"
           echo "Raw data:"
-          aws s3 ls s3://${{ env.S3_BUCKET }}/raw/countries/ --region ${{ env.AWS_REGION }} --recursive || echo "(will be created by Lambda)"
+          aws s3 ls s3://${{ env.S3_BUCKET }}/raw/countries/ --region ${{ env.AWS_REGION }} --recursive || echo "(will be created by Lambda)"echo "  - s3://data-pipeline-country-population/logs/transformation_logs/"
           
-          echo ""
-          echo "Ingestion logs:"
-          aws s3 ls s3://${{ env.S3_BUCKET }}/logs/ingestion_logs/ --region ${{ env.AWS_REGION }} --recursive || echo "(will appear after execution)"
-
-      - name: Deployment summary
-        run: |
-          echo ""
-          echo "========== DEPLOYMENT SUMMARY =========="
-          echo "✅ Lambda function: ingest-api-data"
-          echo "✅ Glue job: country-population-validation"
-          echo "✅ Glue job: country-population-transformation"
-          echo "✅ Scripts: Uploaded to S3"
-          echo ""
-          echo "Pipeline Components:"
-          echo "  1. Lambda (Ingestion) - DEPLOYED"
-          echo "  2. Glue Validation - DEPLOYED"
-          echo "  3. Glue Transformation - DEPLOYED"
-          echo ""
-          echo "Log Locations:"
-          echo "  - s3://data-pipeline-country-population/logs/ingestion_logs/"
-          echo "  - s3://data-pipeline-country-population/logs/validation_logs/"
-          echo "  - s3://data-pipeline-country-population/logs/transformation_logs/"
-          echo ""
-          echo "=========================================="
+          echo ""================================"
+          echo "Ingestion logs:"          aws s3 ls s3://${{ env.S3_BUCKET }}/logs/ingestion_logs/ --region ${{ env.AWS_REGION }} --recursive || echo "(will appear after execution)"      - name: Deployment summary        run: |          echo ""          echo "========== DEPLOYMENT SUMMARY =========="          echo "✅ Lambda function: ingest-api-data"          echo "✅ Glue job: country-population-validation"          echo "✅ Glue job: country-population-transformation"          echo "✅ Scripts: Uploaded to S3"          echo ""          echo "Pipeline Components:"          echo "  1. Lambda (Ingestion) - DEPLOYED"          echo "  2. Glue Validation - DEPLOYED"          echo "  3. Glue Transformation - DEPLOYED"          echo ""          echo "Log Locations:"          echo "  - s3://data-pipeline-country-population/logs/ingestion_logs/"          echo "  - s3://data-pipeline-country-population/logs/validation_logs/"          echo "  - s3://data-pipeline-country-population/logs/transformation_logs/"          echo ""          echo "=========================================="
