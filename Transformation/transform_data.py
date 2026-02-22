@@ -11,26 +11,6 @@ print("=" * 60)
 print("START: TRANSFORMATION JOB")
 print("=" * 60)
 
-def ensure_s3_paths(bucket_name):
-	"""Ensure required S3 paths exist."""
-	import boto3
-	s3_client = boto3.client("s3")
-	
-	paths_to_create = [
-		f"{bucket_name}/validated/countries/.keep",
-		f"{bucket_name}/curated/countries/.keep"
-	]
-	
-	for path in paths_to_create:
-		bucket_name_only = path.split('/')[0]
-		key = '/'.join(path.split('/')[1:])
-		
-		try:
-			s3_client.put_object(Bucket=bucket_name_only, Key=key, Body=b"")
-			print(f"✓ Ensured path: s3://{path}")
-		except Exception as e:
-			print(f"⚠️ Could not create path {path}: {str(e)}")
-
 def check_s3_data(bucket_name, path_prefix):
 	"""Check if data exists in S3 path."""
 	import boto3
@@ -80,10 +60,6 @@ try:
 	print(f"Configuration: Bucket={bucket_name}")
 	print(f"  Validated Zone: {validated_zone}")
 	print(f"  Curated Zone: {curated_zone}")
-	
-	# Ensure S3 paths exist
-	print("Step 0: Ensuring S3 paths exist...")
-	ensure_s3_paths(bucket_name)
 	
 	# Step 1: Check validated data exists
 	print("Step 1: Checking validated data in S3...")

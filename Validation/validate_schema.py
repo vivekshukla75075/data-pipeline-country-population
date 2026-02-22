@@ -12,27 +12,6 @@ logger = logging.getLogger(__name__)
 IS_TEST = 'pytest' in sys.modules or 'unittest' in sys.modules
 IS_GLUE = not IS_TEST
 
-def ensure_s3_paths(bucket_name):
-	"""Ensure required S3 paths exist."""
-	import boto3
-	s3_client = boto3.client("s3")
-	
-	paths_to_create = [
-		f"{bucket_name}/raw/countries/.keep",
-		f"{bucket_name}/validated/countries/.keep",
-		f"{bucket_name}/raw/countries_archive/.keep"
-	]
-	
-	for path in paths_to_create:
-		bucket_name_only = path.split('/')[0]
-		key = '/'.join(path.split('/')[1:])
-		
-		try:
-			s3_client.put_object(Bucket=bucket_name_only, Key=key, Body=b"")
-			print(f"✓ Ensured path: s3://{path}")
-		except Exception as e:
-			print(f"⚠️ Could not create path {path}: {str(e)}")
-
 def initialize_glue():
 	"""Initialize Glue job only when running in Glue environment."""
 	if not IS_GLUE:
@@ -62,10 +41,6 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 		print("=" * 60)
 		print("START: VALIDATION JOB")
 		print("=" * 60)
-		
-		# Ensure S3 paths exist
-		print("Step 0: Ensuring S3 paths exist...")
-		ensure_s3_paths(bucket_name)
 		
 		# Import Glue/Spark only when needed
 		from pyspark.sql.functions import col
@@ -136,6 +111,7 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 			if 'Contents' in response:
 				for obj in response['Contents']:
 					key = obj['Key']
+					# Skip .keep files (0 byte placeholders)
 					if not key.endswith('.keep') and key.endswith('.json'):
 						archive_key = key.replace(raw_zone, archive_zone)
 						
