@@ -229,12 +229,17 @@ jobs:
           echo "Updating Glue Validation job..."
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           aws glue update-job \
-            --job-name country-population-validation \
-            --job-command Name=glueetl,ScriptLocation=s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py \
-            --role arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role \
-            --glue-version "3.0" \
-            --worker-type G.1X \
-            --number-of-workers 3 \
+            --name country-population-validation \
+            --job-update '{
+              "Command": {
+                "Name": "glueetl",
+                "ScriptLocation": "s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py"
+              },
+              "Role": "arn:aws:iam::'"${ACCOUNT_ID}"':role/glue-validation-role",
+              "GlueVersion": "3.0",
+              "WorkerType": "G.1X",
+              "NumberOfWorkers": 3
+            }' \
             --region ${{ env.AWS_REGION }}
           echo "✓ Validation job updated"
 
@@ -243,12 +248,17 @@ jobs:
           echo "Updating Glue Transformation job..."
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
           aws glue update-job \
-            --job-name country-population-transformation \
-            --job-command Name=glueetl,ScriptLocation=s3://${{ env.S3_BUCKET }}/scripts/transform_data.py \
-            --role arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role \
-            --glue-version "3.0" \
-            --worker-type G.1X \
-            --number-of-workers 5 \
+            --name country-population-transformation \
+            --job-update '{
+              "Command": {
+                "Name": "glueetl",
+                "ScriptLocation": "s3://${{ env.S3_BUCKET }}/scripts/transform_data.py"
+              },
+              "Role": "arn:aws:iam::'"${ACCOUNT_ID}"':role/glue-validation-role",
+              "GlueVersion": "3.0",
+              "WorkerType": "G.1X",
+              "NumberOfWorkers": 5
+            }' \
             --region ${{ env.AWS_REGION }}
           echo "✓ Transformation job updated"
 
