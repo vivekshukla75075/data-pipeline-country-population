@@ -10,7 +10,7 @@ Production-ready ETL pipeline that ingests country population data from REST Cou
 - **Storage**: All data stored in S3 bucket `data-pipeline-country-population`
 - **Compute**: AWS Glue for serverless PySpark execution
 
-## Project Structure
+## Project Structure.
 
 ```
 .
