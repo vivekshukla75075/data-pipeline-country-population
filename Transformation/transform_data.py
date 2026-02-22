@@ -2,6 +2,7 @@
 
 import sys
 import logging
+import time
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -112,23 +113,50 @@ try:
 		log_messages.append(f"  - {f['Key']}")
 	log_messages.append("")
 	
-	# Step 2: Read validated data
+	# Step 2: Read validated data with retry logic
 	print("Step 2: Reading validated data from S3...")
 	log_messages.append("Step 2: Reading validated data from S3...")
 	print(f"  Reading from: {validated_path}")
 	log_messages.append(f"  Reading from: {validated_path}")
 	
-	try:
-		validated_df = spark.read.parquet(validated_path)
-		record_count = validated_df.count()
-		print(f"✓ Read {record_count} validated records (Parquet format)")
-		log_messages.append(f"✓ Read {record_count} validated records (Parquet format)")
-		print("Schema:")
-		validated_df.printSchema()
-	except Exception as e1:
-		print(f"  Parquet read failed: {str(e1)}")
-		log_messages.append(f"  Parquet read failed: {str(e1)}")
-		raise
+	max_retries = 3
+	retry_delay = 5
+	validated_df = None
+	record_count = 0
+	
+	for attempt in range(max_retries):
+		try:
+			print(f"  Attempt {attempt + 1}/{max_retries}...")
+			log_messages.append(f"  Attempt {attempt + 1}/{max_retries}...")
+			
+			# Add Hadoop configuration for better S3 handling
+			spark.sparkContext._jsc.hadoopConfiguration().set("fs.s3a.connection.timeout", "30000")
+			spark.sparkContext._jsc.hadoopConfiguration().set("fs.s3a.socket.timeout", "30000")
+			spark.sparkContext._jsc.hadoopConfiguration().set("fs.s3a.attempts.maximum", "5")
+			
+			validated_df = spark.read.parquet(validated_path)
+			record_count = validated_df.count()
+			print(f"✓ Read {record_count} validated records (Parquet format)")
+			log_messages.append(f"✓ Read {record_count} validated records (Parquet format)")
+			print("Schema:")
+			validated_df.printSchema()
+			break
+			
+		except Exception as e:
+			print(f"  Read attempt {attempt + 1} failed: {str(e)[:100]}...")
+			log_messages.append(f"  Read attempt {attempt + 1} failed: {str(e)[:200]}...")
+			
+			if attempt < max_retries - 1:
+				print(f"  Retrying in {retry_delay} seconds...")
+				log_messages.append(f"  Retrying in {retry_delay} seconds...")
+				time.sleep(retry_delay)
+			else:
+				print(f"All {max_retries} attempts failed")
+				log_messages.append(f"All {max_retries} attempts failed")
+				raise Exception(f"Failed to read Parquet data after {max_retries} attempts: {str(e)}")
+	
+	if validated_df is None:
+		raise Exception("Could not read validated data")
 	
 	log_messages.append("")
 	
