@@ -17,7 +17,7 @@ env:
 
 jobs:
   build:
-    name: Build & Test
+    name: Build & Validate
     runs-on: ubuntu-latest
     
     steps:
@@ -32,16 +32,27 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install boto3 requests
 
-      - name: Run linting (flake8)
+      - name: Validate Python syntax
         run: |
-          flake8 Ingestion/ Validation/ Transformation/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          python -m py_compile lambda_deployment/ingest_api_data.py
+          python -m py_compile Validation/validate_schema.py
+          python -m py_compile Transformation/transform_data.py
 
-      - name: Build summary
+      - name: Build Lambda package
         run: |
-          echo "✅ Build validated successfully"
-          echo "Python version: $(python --version)"
+          cd lambda_deployment
+          rm -f ingest_api_data.zip
+          zip -q ingest_api_data.zip ingest_api_data.py
+          cd ..
+          echo "✓ Lambda ZIP created"
+
+      - name: Upload Lambda artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: lambda-deployment
+          path: lambda_deployment/ingest_api_data.zip
 
   deploy:
     name: Deploy to AWS
@@ -60,14 +71,115 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Upload scripts to S3
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: lambda-deployment
+          path: lambda_deployment
+
+      - name: Deploy Lambda function
         run: |
-          echo "Uploading scripts to S3..."
-          aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/ || true
-          aws s3 cp Transformation/transform_data.py s3://${{ env.S3_BUCKET }}/scripts/ || true
-          echo "✓ Scripts uploaded"
+          echo "Deploying Lambda function..."
+          aws lambda update-function-code \
+            --function-name ingest-api-data \
+            --zip-file fileb://lambda_deployment/ingest_api_data.zip \
+            --region ${{ env.AWS_REGION }}
+          echo "✓ Lambda deployed"
+
+      - name: Verify Lambda deployment
+        run: |
+          echo "Verifying Lambda deployment..."
+          LAST_MODIFIED=$(aws lambda get-function \
+            --function-name ingest-api-data \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Configuration.LastModified' \
+            --output text)
+          echo "Lambda Last Modified: $LAST_MODIFIED"
+          echo "✓ Lambda deployment verified"
+
+      - name: Upload Glue scripts to S3
+        run: |
+          echo "Uploading Glue scripts to S3..."
+          aws s3 cp Validation/validate_schema.py s3://${{ env.S3_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}
+          aws s3 cp Transformation/transform_data.py s3://${{ env.S3_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}
+          echo "✓ Glue scripts uploaded"
+
+      - name: Update Glue Validation job
+        run: |
+          echo "Updating Glue Validation job..."
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          aws glue update-job \
+            --job-name country-population-validation \
+            --job-command Name=glueetl,ScriptLocation=s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py \
+            --role arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role \
+            --glue-version "3.0" \
+            --worker-type G.1X \
+            --number-of-workers 3 \
+            --region ${{ env.AWS_REGION }}
+          echo "✓ Validation job updated"
+
+      - name: Update Glue Transformation job
+        run: |
+          echo "Updating Glue Transformation job..."
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          aws glue update-job \
+            --job-name country-population-transformation \
+            --job-command Name=glueetl,ScriptLocation=s3://${{ env.S3_BUCKET }}/scripts/transform_data.py \
+            --role arn:aws:iam::${ACCOUNT_ID}:role/glue-validation-role \
+            --glue-version "3.0" \
+            --worker-type G.1X \
+            --number-of-workers 5 \
+            --region ${{ env.AWS_REGION }}
+          echo "✓ Transformation job updated"
+
+      - name: Test Lambda execution
+        run: |
+          echo "Testing Lambda execution..."
+          aws lambda invoke \
+            --function-name ingest-api-data \
+            --region ${{ env.AWS_REGION }} \
+            /tmp/lambda_response.json
+          
+          STATUS=$(cat /tmp/lambda_response.json | grep -o '"statusCode": [0-9]*' | grep -o '[0-9]*')
+          echo "Lambda Status Code: $STATUS"
+          
+          if [ "$STATUS" = "200" ]; then
+            echo "✓ Lambda execution successful"
+          else
+            echo "✗ Lambda execution failed"
+            cat /tmp/lambda_response.json
+            exit 1
+          fi
+
+      - name: Verify S3 deployment
+        run: |
+          echo "Verifying S3 deployment..."
+          
+          echo "Checking Glue scripts..."
+          aws s3 ls s3://${{ env.S3_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}
+          
+          echo "Checking raw data..."
+          aws s3 ls s3://${{ env.S3_BUCKET }}/raw/countries/ --region ${{ env.AWS_REGION }} --recursive || echo "Raw data folder empty (will be created by Lambda)"
+          
+          echo "Checking logs..."
+          aws s3 ls s3://${{ env.S3_BUCKET }}/logs/ingestion_logs/ --region ${{ env.AWS_REGION }} --recursive || echo "Logs will appear after first execution"
 
       - name: Deployment summary
         run: |
-          echo "✅ Deployment complete"
-          echo "Scripts deployed to S3"
+          echo ""
+          echo "========== DEPLOYMENT SUMMARY =========="
+          echo "✅ Lambda function: ingest-api-data (DEPLOYED)"
+          echo "✅ Glue job: country-population-validation (UPDATED)"
+          echo "✅ Glue job: country-population-transformation (UPDATED)"
+          echo "✅ Scripts: Uploaded to S3"
+          echo ""
+          echo "Pipeline is ready for execution:"
+          echo "  1. Lambda will fetch API data and write to raw/countries/"
+          echo "  2. Validation job will process and write to validated/countries/"
+          echo "  3. Transformation job will create curated/countries/"
+          echo ""
+          echo "Check logs in:"
+          echo "  - s3://data-pipeline-country-population/logs/ingestion_logs/"
+          echo "  - s3://data-pipeline-country-population/logs/validation_logs/"
+          echo "  - s3://data-pipeline-country-population/logs/transformation_logs/"
+          echo "=========================================="
