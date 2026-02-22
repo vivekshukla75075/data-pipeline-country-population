@@ -2,9 +2,7 @@
 
 Production-ready ETL pipeline that ingests country population data from REST Countries API, validates it, transforms it, and makes it queryable via AWS Athena.
 
----
-
-## Architecture Overview
+## Architecture
 
 - **Ingestion**: REST API to fetch country population data
 - **Validation**: Reads raw JSON from S3, validates records (population > 0), outputs parquet
