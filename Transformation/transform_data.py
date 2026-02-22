@@ -2,14 +2,23 @@
 
 import sys
 import logging
+from datetime import datetime
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+execution_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_messages = []
+
 print("=" * 60)
 print("START: TRANSFORMATION JOB")
 print("=" * 60)
+
+log_messages.append("=" * 60)
+log_messages.append("START: TRANSFORMATION JOB")
+log_messages.append("=" * 60)
+log_messages.append("")
 
 def check_s3_data(bucket_name, path_prefix):
 	"""Check if data exists in S3 path."""
@@ -41,6 +50,7 @@ try:
 	import boto3
 	
 	print("✓ Glue imports successful")
+	log_messages.append("✓ Glue imports successful")
 	
 	# Initialize Glue
 	args = getResolvedOptions(sys.argv, ['JOB_NAME', 'TempDir'])
@@ -51,6 +61,8 @@ try:
 	job.init(args['JOB_NAME'], args)
 	
 	print(f"✓ Glue job initialized: {args['JOB_NAME']}")
+	log_messages.append(f"✓ Glue job initialized: {args['JOB_NAME']}")
+	log_messages.append("")
 	
 	# Configuration
 	bucket_name = "data-pipeline-country-population"
@@ -58,54 +70,69 @@ try:
 	curated_zone = "curated/countries"
 	
 	print(f"Configuration: Bucket={bucket_name}")
+	log_messages.append(f"Configuration: Bucket={bucket_name}")
 	print(f"  Validated Zone: {validated_zone}")
+	log_messages.append(f"  Validated Zone: {validated_zone}")
 	print(f"  Curated Zone: {curated_zone}")
+	log_messages.append(f"  Curated Zone: {curated_zone}")
+	log_messages.append("")
 	
 	# Step 1: Check validated data exists
 	print("Step 1: Checking validated data in S3...")
+	log_messages.append("Step 1: Checking validated data in S3...")
 	validated_path = f"s3://{bucket_name}/{validated_zone}/"
 	print(f"  Checking: {validated_path}")
+	log_messages.append(f"  Checking: {validated_path}")
 	
-	data_exists = check_s3_data(bucket_name, validated_zone)
+	s3_client = boto3.client("s3")
+	response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=validated_zone)
 	
-	if not data_exists:
-		print("⚠️ No validated data found!")
-		print("  Possible reasons:")
-		print("    1. Validation job has not completed yet")
-		print("    2. Validation job failed")
-		print("    3. Data was not uploaded to validated zone")
-		print("  Please run validation job first and wait for completion")
-		raise Exception("No validated data found in S3")
+	if 'Contents' not in response:
+		error_msg = "No validated data found!"
+		print(error_msg)
+		log_messages.append(error_msg)
+		raise Exception(error_msg)
+	
+	print(f"✓ Found validated data files")
+	log_messages.append(f"✓ Found validated data files")
+	log_messages.append("")
 	
 	# Step 2: Read validated data
 	print("Step 2: Reading validated data from S3...")
+	log_messages.append("Step 2: Reading validated data from S3...")
 	print(f"  Reading from: {validated_path}")
+	log_messages.append(f"  Reading from: {validated_path}")
 	
 	try:
-		# Try reading as parquet first
 		validated_df = spark.read.parquet(validated_path)
 		record_count = validated_df.count()
 		print(f"✓ Read {record_count} validated records (Parquet format)")
+		log_messages.append(f"✓ Read {record_count} validated records (Parquet format)")
 	except Exception as e1:
 		print(f"  Parquet read failed: {str(e1)}")
 		print("  Trying JSON format...")
+		log_messages.append(f"  Parquet read failed: {str(e1)}")
+		log_messages.append("  Trying JSON format...")
 		
 		try:
-			# Fallback to JSON if parquet fails
 			validated_df = spark.read.json(validated_path)
 			record_count = validated_df.count()
 			print(f"✓ Read {record_count} validated records (JSON format)")
+			log_messages.append(f"✓ Read {record_count} validated records (JSON format)")
 		except Exception as e2:
-			print(f"  JSON read also failed: {str(e2)}")
+			error_msg = f"Could not read validated data: Parquet({e1}), JSON({e2})"
+			print(error_msg)
+			log_messages.append(error_msg)
 			logger.exception("Data read errors:")
-			raise Exception(f"Could not read validated data: Parquet({e1}), JSON({e2})")
+			raise Exception(error_msg)
 	
-	if record_count == 0:
-		raise Exception("Validated data exists but contains 0 records")
+	log_messages.append("")
 	
 	# Step 3: Transform data
 	print("Step 3: Transforming data...")
+	log_messages.append("Step 3: Transforming data...")
 	print(f"  Flattening nested columns...")
+	log_messages.append(f"  Flattening nested columns...")
 	
 	try:
 		transformed_df = validated_df.select(
@@ -118,17 +145,26 @@ try:
 			coalesce(col("currencies"), col("name.common")).alias("currency")
 		)
 		print(f"✓ Transformed {record_count} records")
+		log_messages.append(f"✓ Transformed {record_count} records")
 		print(f"  Schema: country_name, region, subregion, population, area, capital_city, currency")
+		log_messages.append(f"  Schema: country_name, region, subregion, population, area, capital_city, currency")
 	except Exception as e:
-		print(f"⚠️ Error transforming data: {str(e)}")
+		error_msg = f"Error transforming data: {str(e)}"
+		print(error_msg)
+		log_messages.append(error_msg)
 		logger.exception("Transform error:")
 		raise
 	
+	log_messages.append("")
+	
 	# Step 4: Write curated data (partitioned by region)
 	print("Step 4: Writing curated data to S3 (partitioned by region)...")
+	log_messages.append("Step 4: Writing curated data to S3 (partitioned by region)...")
 	curated_path = f"s3://{bucket_name}/{curated_zone}/"
 	print(f"  Writing to: {curated_path}")
+	log_messages.append(f"  Writing to: {curated_path}")
 	print(f"  Partitioning by: region")
+	log_messages.append(f"  Partitioning by: region")
 	
 	try:
 		transformed_df.write \
@@ -139,11 +175,24 @@ try:
 			.save(curated_path)
 		
 		print(f"✓ Written {record_count} records to {curated_path}")
+		log_messages.append(f"✓ Written {record_count} records to {curated_path}")
 		print(f"✓ Data partitioned by region")
+		log_messages.append(f"✓ Data partitioned by region")
 	except Exception as e:
-		print(f"⚠️ Error writing curated data: {str(e)}")
+		error_msg = f"Error writing curated data: {str(e)}"
+		print(error_msg)
+		log_messages.append(error_msg)
 		logger.exception("Write error:")
 		raise
+	
+	log_messages.append("")
+	log_messages.append("=" * 60)
+	log_messages.append("END: TRANSFORMATION JOB - SUCCESS")
+	log_messages.append("=" * 60)
+	log_messages.append(f"Summary:")
+	log_messages.append(f"  Records transformed: {record_count}")
+	log_messages.append(f"  Output location: s3://{bucket_name}/{curated_zone}/")
+	log_messages.append(f"  Partitioned by: region")
 	
 	print("=" * 60)
 	print("END: TRANSFORMATION JOB - SUCCESS")
@@ -154,28 +203,40 @@ try:
 	print(f"  Partitioned by: region")
 	
 	job.commit()
+	log_messages.append("✓ Glue job committed")
 	print("✓ Glue job committed")
 	
-	print("=" * 60)
-	print("NEXT STEPS:")
-	print("  1. Check curated data in S3")
-	print("  2. Query via Athena:")
-	print("     SELECT region, COUNT(*) FROM country_population.countries_curated GROUP BY region;")
-	print("=" * 60)
+	# Write log to S3
+	log_content = "\n".join(log_messages)
+	s3_client = boto3.client("s3")
+	s3_client.put_object(
+		Bucket=bucket_name,
+		Key=f"logs/transformation_logs/transformation_{execution_timestamp}.log",
+		Body=log_content.encode('utf-8')
+	)
 
 except Exception as e:
+	log_messages.append("")
+	log_messages.append("=" * 60)
+	log_messages.append(f"ERROR: {str(e)}")
+	log_messages.append("=" * 60)
+	import traceback
+	log_messages.append(traceback.format_exc())
+	logger.exception("Transformation job failed:")
+	
 	print("=" * 60)
 	print(f"ERROR: {str(e)}")
 	print("=" * 60)
 	import traceback
 	traceback.print_exc()
-	logger.exception("Transformation job failed:")
 	
-	print("")
-	print("TROUBLESHOOTING:")
-	print("  1. Check if validation job completed successfully")
-	print("  2. Verify validated data exists in S3: s3://data-pipeline-country-population/validated/countries/")
-	print("  3. Check Glue job logs in CloudWatch")
-	print("  4. Run validation job again if data is missing")
+	# Write error log
+	log_content = "\n".join(log_messages)
+	s3_client = boto3.client("s3")
+	s3_client.put_object(
+		Bucket=bucket_name,
+		Key=f"logs/transformation_logs/transformation_error_{execution_timestamp}.log",
+		Body=log_content.encode('utf-8')
+	)
 	
 	sys.exit(1)

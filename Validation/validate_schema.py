@@ -3,6 +3,7 @@
 import sys
 import logging
 import os
+from datetime import datetime
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -37,7 +38,15 @@ def initialize_glue():
 
 def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_context=None):
 	"""Run validation job."""
+	execution_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+	log_messages = []
+	
 	try:
+		log_messages.append("=" * 60)
+		log_messages.append("START: VALIDATION JOB")
+		log_messages.append("=" * 60)
+		log_messages.append("")
+		
 		print("=" * 60)
 		print("START: VALIDATION JOB")
 		print("=" * 60)
@@ -49,12 +58,20 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 		if IS_GLUE and glue_context:
 			spark = glue_context['spark']
 			job = glue_context['job']
+			log_messages.append("✓ Using Glue environment")
 			print("✓ Using Glue environment")
 		else:
 			from pyspark.sql import SparkSession
 			spark = SparkSession.builder.appName("ValidationJob").getOrCreate()
 			job = None
+			log_messages.append("✓ Using local Spark environment")
 			print("✓ Using local Spark environment")
+		
+		log_messages.append(f"Configuration: Bucket={bucket_name}")
+		log_messages.append(f"  Raw Zone: {raw_zone}")
+		log_messages.append(f"  Validated Zone: {validated_zone}")
+		log_messages.append(f"  Archive Zone: {archive_zone}")
+		log_messages.append("")
 		
 		print(f"Configuration: Bucket={bucket_name}")
 		print(f"  Raw Zone: {raw_zone}")
@@ -62,45 +79,69 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 		print(f"  Archive Zone: {archive_zone}")
 		
 		# Step 1: Read raw data
+		log_messages.append("Step 1: Reading raw data from S3...")
 		print("Step 1: Reading raw data from S3...")
 		raw_path = f"s3://{bucket_name}/{raw_zone}/"
+		log_messages.append(f"  Reading from: {raw_path}")
 		print(f"  Reading from: {raw_path}")
 		
 		try:
 			raw_df = spark.read.json(raw_path)
 			record_count_raw = raw_df.count()
+			log_messages.append(f"✓ Read {record_count_raw} raw records")
 			print(f"✓ Read {record_count_raw} raw records")
 		except Exception as e:
+			log_messages.append(f"⚠️ No raw data found or error reading: {str(e)}")
 			print(f"⚠️ No raw data found or error reading: {str(e)}")
 			logger.exception("Raw data read error:")
+			
+			# Write log before returning
+			log_content = "\n".join(log_messages)
+			s3_client = boto3.client("s3")
+			s3_client.put_object(
+				Bucket=bucket_name,
+				Key=f"logs/validation_logs/validation_{execution_timestamp}.log",
+				Body=log_content.encode('utf-8')
+			)
 			return 0
 		
+		log_messages.append("")
+		
 		# Step 2: Validate data
+		log_messages.append("Step 2: Validating data (population > 0)...")
 		print("Step 2: Validating data (population > 0)...")
 		validated_df = raw_df.filter(col("population").isNotNull() & (col("population") > 0))
 		record_count_validated = validated_df.count()
+		log_messages.append(f"✓ Validated {record_count_validated} records (filtered from {record_count_raw})")
 		print(f"✓ Validated {record_count_validated} records (filtered from {record_count_raw})")
+		log_messages.append("")
 		
 		# Step 3: Write validated data
+		log_messages.append("Step 3: Writing validated data to S3...")
 		print("Step 3: Writing validated data to S3...")
 		validated_path = f"s3://{bucket_name}/{validated_zone}/"
+		log_messages.append(f"  Writing to: {validated_path}")
 		print(f"  Writing to: {validated_path}")
 		
 		try:
-			# Write with explicit mode and format
 			validated_df.write \
 				.mode("overwrite") \
 				.format("parquet") \
 				.option("compression", "snappy") \
 				.save(validated_path)
 			
+			log_messages.append(f"✓ Written {record_count_validated} records to {validated_path}")
 			print(f"✓ Written {record_count_validated} records to {validated_path}")
 		except Exception as e:
+			log_messages.append(f"⚠️ Error writing validated data: {str(e)}")
 			print(f"⚠️ Error writing validated data: {str(e)}")
 			logger.exception("Write error:")
 			raise
 		
+		log_messages.append("")
+		
 		# Step 4: Archive raw files
+		log_messages.append("Step 4: Archiving raw files...")
 		print("Step 4: Archiving raw files...")
 		s3_client = boto3.client("s3")
 		
@@ -111,27 +152,37 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 			if 'Contents' in response:
 				for obj in response['Contents']:
 					key = obj['Key']
-					# Skip .keep files (0 byte placeholders)
 					if not key.endswith('.keep') and key.endswith('.json'):
 						archive_key = key.replace(raw_zone, archive_zone)
 						
-						# Copy to archive
 						s3_client.copy_object(
 							CopySource={'Bucket': bucket_name, 'Key': key},
 							Bucket=bucket_name,
 							Key=archive_key
 						)
+						log_messages.append(f"  Copied to archive: {archive_key}")
 						print(f"  Copied to archive: {archive_key}")
 						
-						# Delete original
 						s3_client.delete_object(Bucket=bucket_name, Key=key)
+						log_messages.append(f"  ✓ Archived: {key}")
 						print(f"  ✓ Archived: {key}")
 						archived_count += 1
 			
+			log_messages.append(f"✓ Archived {archived_count} files")
 			print(f"✓ Archived {archived_count} files")
 		except Exception as e:
+			log_messages.append(f"⚠️ Error archiving files: {str(e)}")
 			print(f"⚠️ Error archiving files: {str(e)}")
 			logger.exception("Archive error:")
+		
+		log_messages.append("")
+		log_messages.append("=" * 60)
+		log_messages.append("END: VALIDATION JOB - SUCCESS")
+		log_messages.append("=" * 60)
+		log_messages.append(f"Summary:")
+		log_messages.append(f"  Raw records read: {record_count_raw}")
+		log_messages.append(f"  Validated records: {record_count_validated}")
+		log_messages.append(f"  Archived files: {archived_count}")
 		
 		print("=" * 60)
 		print("END: VALIDATION JOB - SUCCESS")
@@ -143,17 +194,43 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, glue_con
 		
 		if job:
 			job.commit()
+			log_messages.append("✓ Glue job committed")
 			print("✓ Glue job committed")
+		
+		# Write log to S3
+		log_content = "\n".join(log_messages)
+		s3_client.put_object(
+			Bucket=bucket_name,
+			Key=f"logs/validation_logs/validation_{execution_timestamp}.log",
+			Body=log_content.encode('utf-8')
+		)
 		
 		return record_count_validated
 	
 	except Exception as e:
+		log_messages.append("")
+		log_messages.append("=" * 60)
+		log_messages.append(f"ERROR: {str(e)}")
+		log_messages.append("=" * 60)
+		import traceback
+		log_messages.append(traceback.format_exc())
+		logger.exception("Validation job failed:")
+		
 		print("=" * 60)
 		print(f"ERROR: {str(e)}")
 		print("=" * 60)
 		import traceback
 		traceback.print_exc()
-		logger.exception("Validation job failed:")
+		
+		# Write error log
+		log_content = "\n".join(log_messages)
+		s3_client = boto3.client("s3")
+		s3_client.put_object(
+			Bucket=bucket_name,
+			Key=f"logs/validation_logs/validation_error_{execution_timestamp}.log",
+			Body=log_content.encode('utf-8')
+		)
+		
 		return 0
 
 def main():
