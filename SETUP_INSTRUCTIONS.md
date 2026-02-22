@@ -1,140 +1,172 @@
-# AWS Setup Instructions
+# Setup Instructions - ETL Pipeline
 
 ## Prerequisites
 
-Your AWS IAM user needs the following permissions:
-- `s3:GetObject`
-- `s3:PutObject`
-- `s3:ListBucket`
+Before running the pipeline, ensure the following are set up:
 
-Your AWS administrator needs to create:
-- S3 bucket for data storage
-- IAM role for Glue jobs
+### 1. IAM Permissions (Admin Only)
 
-## Manual Setup Steps
+The `data-pipeline-country-population` IAM user needs the following permissions:
 
-### 1. Create S3 Bucket (Admin Only)
-
-Replace `ACCOUNT_ID` with your actual AWS account ID:
-
-```bash
-aws s3api create-bucket \
-  --bucket data-pipeline-bucket-ACCOUNT_ID-dev \
-  --region us-east-1
-```
-
-Or use AWS Console:
-1. Go to S3 service
-2. Click "Create Bucket"
-3. Name: `data-pipeline-bucket-ACCOUNT_ID-dev`
-4. Region: `us-east-1`
-5. Click "Create"
-
-### 2. Enable Versioning (Admin Only)
-
-```bash
-aws s3api put-bucket-versioning \
-  --bucket data-pipeline-bucket-ACCOUNT_ID-dev \
-  --versioning-configuration Status=Enabled
-```
-
-### 3. Create IAM Role for Glue (Admin Only)
-
-```bash
-# Create trust policy file
-cat > trust-policy.json <<'EOF'
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "glue.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-EOF
-
-# Create role
-aws iam create-role \
-  --role-name glue-validation-role \
-  --assume-role-policy-document file://trust-policy.json
-
-# Create and attach S3 policy
-cat > s3-policy.json <<'EOF'
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:DeleteObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::data-pipeline-bucket-ACCOUNT_ID-dev",
-        "arn:aws:s3:::data-pipeline-bucket-ACCOUNT_ID-dev/*"
-      ]
-    }
-  ]
-}
-EOF
-
-aws iam put-role-policy \
-  --role-name glue-validation-role \
-  --policy-name S3AccessPolicy \
-  --policy-document file://s3-policy.json
-```
-
-### 4. Grant User S3 Permissions (Admin Only)
-
-Attach this policy to the IAM user:
-
+#### Lambda Update Permissions
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:ListBucket",
-        "s3:GetObject",
-        "s3:PutObject"
-      ],
-      "Resource": [
-        "arn:aws:s3:::data-pipeline-bucket-*",
-        "arn:aws:s3:::data-pipeline-bucket-*/*"
-      ]
-    }
-  ]
+  "Sid": "UpdateLambdaFunction",
+  "Effect": "Allow",
+  "Action": [
+    "lambda:UpdateFunctionCode",
+    "lambda:GetFunction",
+    "lambda:GetFunctionConfiguration",
+    "lambda:InvokeFunction"
+  ],
+  "Resource": "arn:aws:lambda:us-east-1:778277577996:function:ingest-api-data"
 }
 ```
 
-## Deployment
+#### Glue Create/Delete Permissions
+```json
+{
+  "Sid": "GlueJobManagement",
+  "Effect": "Allow",
+  "Action": [
+    "glue:CreateJob",
+    "glue:DeleteJob",
+    "glue:GetJob",
+    "glue:StartJobRun",
+    "glue:GetJobRun"
+  ],
+  "Resource": "arn:aws:glue:us-east-1:778277577996:job/*"
+}
+```
 
-Once the bucket and IAM role are created, the GitHub Actions workflow will:
-1. Verify the bucket exists
-2. Upload validation scripts
-3. Upload transformation scripts
-4. Upload IAM policies
+#### S3 Access (Already configured)
+```json
+{
+  "Sid": "S3Access",
+  "Effect": "Allow",
+  "Action": ["s3:*"],
+  "Resource": ["arn:aws:s3:::data-pipeline-country-population/*"]
+}
+```
 
-Push to the feature branch to trigger deployment:
+### 2. Setup Glue Jobs (Must be done once)
+
+Run the setup script to create Glue jobs:
 
 ```bash
-git push origin feature/sync-upstream-changes
+chmod +x infrastructure/scripts/setup_glue_jobs.sh
+./infrastructure/scripts/setup_glue_jobs.sh
+```
+
+This will:
+- ✅ Create country-population-validation job
+- ✅ Create country-population-transformation job
+- ✅ Configure with correct script locations
+- ✅ Set proper worker types and counts
+
+## Running the Pipeline
+
+### Step 1: Trigger Lambda Ingestion
+
+```bash
+aws lambda invoke \
+  --function-name ingest-api-data \
+  --region us-east-1 \
+  response.json
+
+cat response.json | jq '.'
+```
+
+Wait 30 seconds for data to appear in S3.
+
+### Step 2: Run Validation Job
+
+```bash
+aws glue start-job-run \
+  --job-name country-population-validation \
+  --region us-east-1
+
+# Check status
+aws glue get-job-run \
+  --job-name country-population-validation \
+  --run-id <JOB_RUN_ID> \
+  --region us-east-1 \
+  --query 'JobRun.JobRunState'
+```
+
+Wait 90 seconds for validation to complete.
+
+### Step 3: Run Transformation Job
+
+```bash
+aws glue start-job-run \
+  --job-name country-population-transformation \
+  --region us-east-1
+
+# Check status
+aws glue get-job-run \
+  --job-name country-population-transformation \
+  --run-id <JOB_RUN_ID> \
+  --region us-east-1 \
+  --query 'JobRun.JobRunState'
+```
+
+Wait 90 seconds for transformation to complete.
+
+## Verify Results
+
+### Check S3 Data
+
+```bash
+# Raw data
+aws s3 ls s3://data-pipeline-country-population/raw/countries/ --region us-east-1
+
+# Validated data
+aws s3 ls s3://data-pipeline-country-population/validated/countries/ --region us-east-1
+
+# Curated data
+aws s3 ls s3://data-pipeline-country-population/curated/countries/ --region us-east-1 --recursive
+```
+
+### Check Logs
+
+```bash
+# Ingestion logs
+aws s3 ls s3://data-pipeline-country-population/logs/ingestion_logs/ --region us-east-1
+
+# Validation logs
+aws s3 ls s3://data-pipeline-country-population/logs/validation_logs/ --region us-east-1
+
+# Transformation logs
+aws s3 ls s3://data-pipeline-country-population/logs/transformation_logs/ --region us-east-1
 ```
 
 ## Troubleshooting
 
-**Error: AccessDenied on CreateBucket**
-- Solution: Ask AWS admin to create bucket first
+### Lambda function not found
+- Ensure Lambda function `ingest-api-data` exists
+- Check: `aws lambda get-function --function-name ingest-api-data --region us-east-1`
 
-**Error: Bucket does not exist**
-- Solution: Verify bucket name matches your account ID and environment
+### Glue job metadata error
+- Run the setup script: `./infrastructure/scripts/setup_glue_jobs.sh`
+- Verify scripts are in S3: `aws s3 ls s3://data-pipeline-country-population/scripts/`
 
-**Error: AccessDenied on PutObject**
-- Solution: Verify IAM user has S3:PutObject permission
+### Permission denied errors
+- Ask admin to grant required IAM permissions (see Prerequisites above)
+- Verify: `aws iam get-user-policy --user-name data-pipeline-country-population --policy-name <PolicyName>`
+
+## GitHub Actions Deployment
+
+The GitHub Actions workflow automatically:
+1. ✅ Builds Lambda package
+2. ✅ Creates/updates Lambda function
+3. ✅ Uploads Glue scripts to S3
+4. ⚠️ Requires admin to create Glue jobs (use setup script)
+
+## Support
+
+For issues:
+1. Check logs in S3
+2. Verify IAM permissions
+3. Ensure scripts are uploaded to S3
+4. Run setup script to recreate Glue jobs
