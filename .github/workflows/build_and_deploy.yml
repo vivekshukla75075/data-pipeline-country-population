@@ -147,43 +147,23 @@ jobs:
           aws s3 cp Transformation/transform_data.py s3://${{ env.S3_BUCKET }}/scripts/ --region ${{ env.AWS_REGION }}
           echo "✓ Glue scripts uploaded"
 
-      - name: Update Glue jobs
+      - name: Glue jobs manual update instructions
         run: |
-          python3 << 'EOF'
-          import boto3
-          
-          glue = boto3.client('glue', region_name='${{ env.AWS_REGION }}')
-          sts = boto3.client('sts')
-          
-          account_id = sts.get_caller_identity()['Account']
-          role_arn = f'arn:aws:iam::{account_id}:role/glue-validation-role'
-          
-          print("Updating Glue Validation job...")
-          glue.update_job(
-              JobName='country-population-validation',
-              JobUpdate={
-                  'Command': {'Name': 'glueetl', 'ScriptLocation': 's3://${{ env.S3_BUCKET }}/scripts/validate_schema.py'},
-                  'Role': role_arn,
-                  'GlueVersion': '3.0',
-                  'WorkerType': 'G.1X',
-                  'NumberOfWorkers': 3
-              }
-          )
-          print("✓ Validation job updated")
-          
-          print("Updating Glue Transformation job...")
-          glue.update_job(
-              JobName='country-population-transformation',
-              JobUpdate={
-                  'Command': {'Name': 'glueetl', 'ScriptLocation': 's3://${{ env.S3_BUCKET }}/scripts/transform_data.py'},
-                  'Role': role_arn,
-                  'GlueVersion': '3.0',
-                  'WorkerType': 'G.1X',
-                  'NumberOfWorkers': 5
-              }
-          )
-          print("✓ Transformation job updated")
-          EOF
+          echo ""
+          echo "========== GLUE JOBS MANUAL UPDATE =========="
+          echo "Admin: Update Glue jobs with the new scripts"
+          echo ""
+          echo "Validation job (country-population-validation):"
+          echo "  Script: s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py"
+          echo ""
+          echo "Transformation job (country-population-transformation):"
+          echo "  Script: s3://${{ env.S3_BUCKET }}/scripts/transform_data.py"
+          echo ""
+          echo "Or use AWS CLI:"
+          echo "  aws glue update-job --job-name country-population-validation --job-update Command={Name=glueetl,ScriptLocation=s3://${{ env.S3_BUCKET }}/scripts/validate_schema.py}"
+          echo ""
+          echo "=========================================="
+          echo ""
 
       - name: Test Lambda execution
         run: |
@@ -197,10 +177,13 @@ jobs:
         run: |
           echo ""
           echo "========== DEPLOYMENT SUMMARY =========="
-          echo "✅ Lambda function: ingest-api-data"
-          echo "✅ Glue job: country-population-validation"
-          echo "✅ Glue job: country-population-transformation"
-          echo "✅ Scripts: Uploaded to S3"
+          echo "✅ Lambda function: ingest-api-data - DEPLOYED"
+          echo "⚠️  Glue scripts: UPLOADED to S3"
+          echo "⚠️  Glue jobs: NEED MANUAL UPDATE (requires admin)"
           echo ""
-          echo "Pipeline is ready for execution!"
+          echo "Next steps:"
+          echo "  1. Admin: Add GlueUpdatePolicy to IAM user"
+          echo "  2. Admin: Update Glue jobs with new scripts"
+          echo "  3. Run: aws glue start-job-run --job-name country-population-validation"
+          echo "  4. Run: aws glue start-job-run --job-name country-population-transformation"
           echo "=========================================="
