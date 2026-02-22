@@ -160,7 +160,33 @@ jobs:
               --memory-size 256 \
               --region ${{ env.AWS_REGION }}
             
-            echo "✓ Lambda function created"
+            echo "Lambda function created, waiting for it to be ready..."
+            # Wait for Lambda to be ready
+            RETRY_COUNT=0
+            MAX_RETRIES=30
+          
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              STATE=$(aws lambda get-function \
+                --function-name ingest-api-data \
+                --region ${{ env.AWS_REGION }} \
+                --query 'Configuration.State' \
+                --output text 2>/dev/null || echo "Creating")
+              
+              if [ "$STATE" = "Active" ]; then
+                echo "✓ Lambda function is ready (State: $STATE)"
+                break
+              else
+                echo "Lambda state: $STATE (retry $((RETRY_COUNT + 1))/$MAX_RETRIES)"
+                sleep 2
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+              fi
+            done
+            
+            if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+              echo "✗ Lambda function did not become ready in time"
+              exit 1
+            fi
+
           else
             echo "✓ Lambda function already exists"
           fi
