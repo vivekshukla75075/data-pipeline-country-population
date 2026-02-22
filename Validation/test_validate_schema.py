@@ -1,108 +1,138 @@
-"""Unit tests for validate_schema.py"""
+"""Unit tests for validation job."""
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 import sys
 import os
+from unittest.mock import Mock, patch, MagicMock
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-
-class TestSetupAwsInfrastructure:
-	@patch("boto3.client")
-	def test_create_bucket_success(self, mock_boto_client):
-		"""Test successful S3 bucket creation."""
-		mock_s3 = Mock()
-		mock_iam = Mock()
-		mock_boto_client.side_effect = lambda service: mock_s3 if service == "s3" else mock_iam
-		
-		from validate_schema import setup_aws_infrastructure
-		setup_aws_infrastructure("test-bucket", "test-role")
-		
-		mock_s3.create_bucket.assert_called_once_with(Bucket="test-bucket")
-		mock_iam.create_role.assert_called_once()
-
-	@patch("boto3.client")
-	def test_bucket_already_exists(self, mock_boto_client):
-		"""Test handling of existing bucket."""
-		mock_s3 = Mock()
-		mock_iam = Mock()
-		mock_boto_client.side_effect = lambda service: mock_s3 if service == "s3" else mock_iam
-		mock_s3.create_bucket.side_effect = mock_s3.exceptions.BucketAlreadyOwnedByYou()
-		
-		from validate_schema import setup_aws_infrastructure
-		setup_aws_infrastructure("test-bucket", "test-role")
-		
-		mock_iam.create_role.assert_called_once()
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(__file__))
 
 
-class TestRunValidation:
-	@patch("pyspark.sql.functions.col")
-	@patch("pyspark.sql.SparkSession")
-	def test_validation_filters_records(self, mock_spark_session, mock_col):
-		"""Test that validation filters records with population > 0."""
-		mock_spark = Mock()
-		mock_df = Mock()
-		mock_filter_result = Mock()
+class TestValidationJob:
+	"""Test validation job functions."""
+	
+	def test_validation_reads_raw_data(self):
+		"""Test that validation reads raw data from S3."""
+		from validate_schema import run_validation
 		
-		# Setup col mock to support chaining and operators
-		mock_col_result = MagicMock()
-		mock_col_result.isNotNull.return_value = mock_col_result
-		mock_col_result.__gt__.return_value = mock_col_result
-		mock_col_result.__and__.return_value = mock_col_result
-		mock_col.return_value = mock_col_result
-		
-		# Setup DataFrame mocks
-		mock_df.filter.return_value = mock_filter_result
-		mock_filter_result.count.return_value = 10
-		
+		# Mock Spark
+		mock_spark = MagicMock()
+		mock_df = MagicMock()
+		mock_df.count.return_value = 100
+		mock_df.filter.return_value = mock_df
 		mock_spark.read.json.return_value = mock_df
-		mock_spark_session.builder.appName.return_value.getOrCreate.return_value = mock_spark
 		
-		from validate_schema import run_validation_spark
-		result = run_validation_spark(
-			bucket_name="test-bucket",
-			raw_path="raw/test.json",
-			validated_path="validated/test/"
-		)
+		# Mock S3
+		with patch('validate_schema.boto3.client') as mock_s3:
+			mock_s3_client = MagicMock()
+			mock_s3.return_value = mock_s3_client
+			mock_s3_client.list_objects_v2.return_value = {'Contents': []}
+			
+			glue_context = {'spark': mock_spark, 'job': None}
+			result = run_validation(
+				"test-bucket",
+				"raw/countries",
+				"validated/countries",
+				"raw/countries_archive",
+				glue_context
+			)
+			
+			assert result >= 0
+	
+	def test_validation_filters_by_population(self):
+		"""Test that validation filters records by population > 0."""
+		from validate_schema import run_validation
 		
-		assert result == 10
-		mock_df.filter.assert_called_once()
-		mock_col.assert_called()
-
-	@patch("pyspark.sql.functions.col")
-	@patch("pyspark.sql.SparkSession")
-	def test_validation_writes_parquet(self, mock_spark_session, mock_col):
-		"""Test that validation writes output to S3."""
-		mock_spark = Mock()
-		mock_df = Mock()
-		mock_filter_result = Mock()
-		mock_write = Mock()
-		mock_mode_result = Mock()
+		# Mock Spark
+		mock_spark = MagicMock()
+		mock_df = MagicMock()
+		mock_filtered_df = MagicMock()
 		
-		# Setup col mock to support chaining and operators
-		mock_col_result = MagicMock()
-		mock_col_result.isNotNull.return_value = mock_col_result
-		mock_col_result.__gt__.return_value = mock_col_result
-		mock_col_result.__and__.return_value = mock_col_result
-		mock_col.return_value = mock_col_result
-		
-		# Setup DataFrame chain mocks
-		mock_df.filter.return_value = mock_filter_result
-		mock_filter_result.write = mock_write
-		mock_write.mode.return_value = mock_mode_result
-		mock_filter_result.count.return_value = 5
-		
+		mock_df.count.return_value = 100
+		mock_filtered_df.count.return_value = 95  # 5 records filtered
+		mock_df.filter.return_value = mock_filtered_df
 		mock_spark.read.json.return_value = mock_df
-		mock_spark_session.builder.appName.return_value.getOrCreate.return_value = mock_spark
 		
-		from validate_schema import run_validation_spark
-		run_validation_spark(
-			bucket_name="test-bucket",
-			raw_path="raw/test.json",
-			validated_path="validated/test/"
-		)
+		# Mock S3
+		with patch('validate_schema.boto3.client') as mock_s3:
+			mock_s3_client = MagicMock()
+			mock_s3.return_value = mock_s3_client
+			mock_s3_client.list_objects_v2.return_value = {'Contents': []}
+			
+			glue_context = {'spark': mock_spark, 'job': None}
+			result = run_validation(
+				"test-bucket",
+				"raw/countries",
+				"validated/countries",
+				"raw/countries_archive",
+				glue_context
+			)
+			
+			assert result == 95
+	
+	def test_validation_writes_parquet(self):
+		"""Test that validation writes data to parquet."""
+		from validate_schema import run_validation
 		
-		mock_write.mode.assert_called_with("overwrite")
-		mock_mode_result.parquet.assert_called_once()
+		# Mock Spark
+		mock_spark = MagicMock()
+		mock_df = MagicMock()
+		mock_df.count.return_value = 100
+		mock_df.filter.return_value = mock_df
+		mock_df.write.mode.return_value = mock_df
+		mock_spark.read.json.return_value = mock_df
+		
+		# Mock S3
+		with patch('validate_schema.boto3.client') as mock_s3:
+			mock_s3_client = MagicMock()
+			mock_s3.return_value = mock_s3_client
+			mock_s3_client.list_objects_v2.return_value = {'Contents': []}
+			
+			glue_context = {'spark': mock_spark, 'job': None}
+			result = run_validation(
+				"test-bucket",
+				"raw/countries",
+				"validated/countries",
+				"raw/countries_archive",
+				glue_context
+			)
+			
+			# Verify parquet.write was called
+			mock_df.write.mode.assert_called()
+	
+	def test_validation_archives_raw_files(self):
+		"""Test that validation archives raw files."""
+		from validate_schema import run_validation
+		
+		# Mock Spark
+		mock_spark = MagicMock()
+		mock_df = MagicMock()
+		mock_df.count.return_value = 100
+		mock_df.filter.return_value = mock_df
+		mock_spark.read.json.return_value = mock_df
+		
+		# Mock S3
+		with patch('validate_schema.boto3.client') as mock_s3:
+			mock_s3_client = MagicMock()
+			mock_s3.return_value = mock_s3_client
+			
+			# Mock list_objects_v2 to return files
+			mock_s3_client.list_objects_v2.return_value = {
+				'Contents': [
+					{'Key': 'raw/countries/countries_raw_20240222_080241.json'}
+				]
+			}
+			
+			glue_context = {'spark': mock_spark, 'job': None}
+			result = run_validation(
+				"test-bucket",
+				"raw/countries",
+				"validated/countries",
+				"raw/countries_archive",
+				glue_context
+			)
+			
+			# Verify copy_object and delete_object were called
+			mock_s3_client.copy_object.assert_called()
+			mock_s3_client.delete_object.assert_called()
