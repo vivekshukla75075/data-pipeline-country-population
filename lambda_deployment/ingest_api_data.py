@@ -1,6 +1,7 @@
 """Lambda function to ingest data from REST Countries API and upload to S3."""
 
 import json
+import os
 import boto3
 import urllib.request
 import urllib.error
@@ -18,7 +19,9 @@ def lambda_handler(event, context):
 	"""Lambda handler for API ingestion."""
 	
 	execution_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-	log_bucket = "data-pipeline-country-population"
+	bucket_name = os.environ.get("BUCKET_NAME", "data-pipeline-country-population")
+	raw_zone = os.environ.get("RAW_ZONE", "raw/countries")
+	log_bucket = os.environ.get("LOG_BUCKET", bucket_name)
 	log_key = f"logs/ingestion_logs/ingestion_{execution_timestamp}.log"
 	
 	log_messages = []
@@ -32,8 +35,6 @@ def lambda_handler(event, context):
 		
 		# Configuration
 		api_url = "https://restcountries.com/v3.1/all"
-		bucket_name = "data-pipeline-country-population"
-		raw_zone = "raw/countries"
 		
 		log_messages.append(f"Configuration:")
 		log_messages.append(f"  API URL: {api_url}")

@@ -1,0 +1,349 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EventBridge, Step Functions, SQS, SNS, and IAM resources for the country population pipeline'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  ScheduleExpression:
+    Type: String
+    Default: rate(1 day)
+    Description: EventBridge schedule expression for the ingestion run
+  IngestionLambdaName:
+    Type: String
+    Default: ingest-api-data
+    Description: Existing Lambda function that ingests data from the API
+  ValidationJobName:
+    Type: String
+    Default: country-population-validation
+    Description: Glue validation job name
+  TransformationJobName:
+    Type: String
+    Default: country-population-transformation
+    Description: Glue transformation job name
+  NotificationLambdaName:
+    Type: String
+    Default: pipeline-status-notifier
+    Description: Lambda function that sends notifications to SQS and SNS
+  NotificationEmail:
+    Type: String
+    Default: ntvs02011999@gmail.com
+    Description: Email address for pipeline notifications
+  StateMachineName:
+    Type: String
+    Default: country-population-orchestration
+    Description: Name of the Step Functions state machine
+
+Resources:
+  PipelineNotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'data-pipeline-notifications-${Environment}'
+      MessageRetentionPeriod: 1209600
+      VisibilityTimeout: 60
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  PipelineNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'data-pipeline-notifications-${Environment}'
+      DisplayName: Data Pipeline Notifications
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  PipelineNotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PipelineNotificationTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  PipelineStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'data-pipeline-statemachine-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: pipeline-state-machine-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${IngestionLambdaName}'
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${NotificationLambdaName}'
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  PipelineNotificationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'data-pipeline-notifier-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: sqs-sns-send-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt PipelineNotificationQueue.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref PipelineNotificationTopic
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'data-pipeline-eventbridge-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-state-machine-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  PipelineStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Ref StateMachineName
+      RoleArn: !GetAtt PipelineStateMachineRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Orchestrates ingestion, validation, transformation, and notifications",
+          "StartAt": "IngestData",
+          "States": {
+            "IngestData": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${IngestionLambdaName}",
+                "Payload": {
+                  "input.$": "$"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 10,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "CheckIngestionStatus"
+            },
+            "CheckIngestionStatus": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.Payload.statusCode",
+                  "NumericEquals": 200,
+                  "Next": "StartValidation"
+                }
+              ],
+              "Default": "NotifyFailure"
+            },
+            "StartValidation": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${ValidationJobName}"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 20,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "StartTransformation",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ]
+            },
+            "StartTransformation": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${TransformationJobName}"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 20,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "NotifySuccess",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ]
+            },
+            "NotifySuccess": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${NotificationLambdaName}",
+                "Payload": {
+                  "status": "SUCCESS",
+                  "stage": "pipeline",
+                  "message.$": "States.Format('Pipeline completed successfully for execution {}', $$.Execution.Id)",
+                  "executionArn.$": "$$.Execution.Id"
+                }
+              },
+              "End": true
+            },
+            "NotifyFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${NotificationLambdaName}",
+                "Payload": {
+                  "status": "FAILED",
+                  "stage": "pipeline",
+                  "message.$": "States.Format('Pipeline failed for execution {}', $$.Execution.Id)",
+                  "executionArn.$": "$$.Execution.Id"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt PipelineStateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  PipelineStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/states/${StateMachineName}-${Environment}'
+      RetentionInDays: 14
+
+  IngestionLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${IngestionLambdaName}'
+      Principal: states.amazonaws.com
+      SourceArn: !Ref PipelineStateMachine
+
+  NotificationLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${NotificationLambdaName}'
+      Principal: states.amazonaws.com
+      SourceArn: !Ref PipelineStateMachine
+
+  PipelineScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub 'data-pipeline-schedule-${Environment}'
+      Description: Trigger the country population pipeline on schedule
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !Ref PipelineStateMachine
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: PipelineStateMachineTarget
+          Input: '{"triggeredBy":"EventBridge"}'
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the Step Functions state machine
+    Value: !Ref PipelineStateMachine
+  NotificationQueueUrl:
+    Description: URL of the SQS notification queue
+    Value: !Ref PipelineNotificationQueue
+  NotificationTopicArn:
+    Description: ARN of the SNS notification topic
+    Value: !Ref PipelineNotificationTopic
