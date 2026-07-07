@@ -41,15 +41,6 @@ jobs:
         run: |
           python -m py_compile lambda_deployment/ingest_api_data.py lambda_deployment/notify_pipeline_status.py
 
-      - name: Validate CloudFormation template
-        run: |
-          python - <<'PY'
-          import yaml
-          with open('infra/cloudformation/orchestration.yaml', 'r', encoding='utf-8') as fh:
-              yaml.safe_load(fh)
-          print('CloudFormation YAML is valid')
-          PY
-
       - name: Configure AWS credentials
         if: ${{ env.AWS_ROLE_ARN != '' }}
         uses: aws-actions/configure-aws-credentials@v4
@@ -63,6 +54,12 @@ jobs:
           echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
           echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=${AWS_REGION}" >> $GITHUB_ENV
+
+      - name: Validate CloudFormation template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://infra/cloudformation/orchestration.yaml \
+            --region "${AWS_REGION}" > /dev/null && echo "CloudFormation template is valid"
 
       - name: Package notifier Lambda
         run: |
