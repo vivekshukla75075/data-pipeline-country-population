@@ -1,0 +1,67 @@
+# Configuration for Data Pipeline ETL
+
+application:
+  name: "data-pipeline-country-population"
+  version: "1.0.0"
+  environment: "dev"
+
+aws:
+  region: "us-east-1"
+  s3_bucket: "data-pipeline-country-population"
+  glue_job_role: "glue-validation-role"
+
+s3:
+  raw_zone: "raw/countries"
+  validated_zone: "validated/countries"
+  curated_zone: "curated/countries"
+  scripts_zone: "scripts"
+  policies_zone: "policies"
+
+ingestion:
+  api:
+    url: "https://restcountries.com/v3.1/all"
+    timeout: 30
+    retries: 3
+    retry_delay: 5
+  output_file: "countries_raw.json"
+  batch_size: 100
+
+validation:
+  required_fields:
+    - "name"
+    - "population"
+    - "region"
+  rules:
+    population_min: 0
+    allow_null_fields: false
+
+transformation:
+  output_format: "parquet"
+  partition_by: "region"
+  compression: "snappy"
+  mode: "overwrite"
+
+logging:
+  level: "INFO"
+  format: "json"
+  file: "logs/etl.log"
+  max_size: 104857600  # 100MB
+
+glue_jobs:
+  ingestion:
+    name: "country-population-ingestion"
+    script: "s3://data-pipeline-country-population/scripts/ingest_data.py"
+    worker_type: "G.1X"
+    num_workers: 3
+  
+  validation:
+    name: "country-population-validation"
+    script: "s3://data-pipeline-country-population/scripts/validate_schema.py"
+    worker_type: "G.1X"
+    num_workers: 3
+  
+  transformation:
+    name: "country-population-transformation"
+    script: "s3://data-pipeline-country-population/scripts/transform_data.py"
+    worker_type: "G.1X"
+    num_workers: 5

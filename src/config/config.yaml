@@ -1,0 +1,63 @@
+application:
+  name: "data-pipeline-country-population"
+  version: "1.0.0"
+  environment: "dev"
+
+aws:
+  region: "us-east-1"
+  s3_bucket: "data-pipeline-country-population"
+  glue_job_role: "glue-validation-role"
+  lambda_execution_role: "lambda-execution-role"
+  step_functions_role: "step-functions-role"
+
+s3:
+  raw_zone: "raw/countries"
+  validated_zone: "validated/countries"
+  curated_zone: "curated/countries"
+  scripts_zone: "scripts"
+  policies_zone: "policies"
+  athena_results: "athena-results"
+
+ingestion:
+  api:
+    url: "https://restcountries.com/v3.1/all"
+    timeout: 30
+    retries: 3
+  output_file: "countries_raw.json"
+
+validation:
+  required_fields:
+    - "name"
+    - "population"
+    - "region"
+
+transformation:
+  output_format: "parquet"
+  partition_by: "region"
+  compression: "snappy"
+
+glue:
+  database_name: "country_population"
+  raw_table: "countries_raw"
+  validated_table: "countries_validated"
+  curated_table: "countries_curated"
+  crawler_role: "glue-crawler-role"
+
+athena:
+  database: "country_population"
+  workgroup: "primary"
+  output_location: "s3://data-pipeline-country-population/athena-results/"
+
+lambda:
+  timeout: 300
+  memory: 256
+  layers: []
+
+step_functions:
+  name: "country-population-etl-pipeline"
+  timeout: 3600
+
+logging:
+  level: "INFO"
+  format: "json"
+  file: "logs/etl.log"

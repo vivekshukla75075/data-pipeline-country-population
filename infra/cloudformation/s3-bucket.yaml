@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to create S3 bucket for data pipeline'
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: data-pipeline-country-population
+    Description: Name of the S3 bucket to create
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+
+Resources:
+  DataPipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${BucketName}-${AWS::AccountId}-${Environment}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: data-pipeline-country-population
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: glue-validation-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt DataPipelineBucket.Arn
+                  - !Sub '${DataPipelineBucket.Arn}/*'
+
+Outputs:
+  BucketName:
+    Description: Name of the created S3 bucket
+    Value: !Ref DataPipelineBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+  BucketArn:
+    Description: ARN of the created S3 bucket
+    Value: !GetAtt DataPipelineBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketArn'
+  GlueRoleArn:
+    Description: ARN of the Glue job role
+    Value: !GetAtt GlueJobRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-GlueRoleArn'
