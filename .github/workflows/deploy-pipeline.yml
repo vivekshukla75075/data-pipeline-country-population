@@ -1,4 +1,4 @@
-name: Deploy Data Pipeline
+﻿name: Deploy Data Pipeline
 
 on:
   push:
@@ -17,7 +17,9 @@ jobs:
       AWS_REGION: us-east-1
       ENVIRONMENT: dev
       STACK_NAME: data-pipeline-orchestration
+      INGESTION_LAMBDA_NAME: ingest-api-data
       NOTIFICATION_LAMBDA_NAME: pipeline-status-notifier
+      VALIDATION_TRIGGER_LAMBDA_NAME: pipeline-validation-trigger
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -39,7 +41,7 @@ jobs:
 
       - name: Validate Python syntax
         run: |
-          python -m py_compile lambda_deployment/ingest_api_data.py lambda_deployment/notify_pipeline_status.py
+          python -m py_compile lambda_deployment/ingest_api_data.py lambda_deployment/notify_pipeline_status.py lambda_deployment/trigger_validation.py
 
       - name: Configure AWS credentials
         if: ${{ env.AWS_ROLE_ARN != '' }}
@@ -57,15 +59,8 @@ jobs:
 
       - name: Validate CloudFormation template
         run: |
-          aws cloudformation validate-template \
-            --template-body file://infra/cloudformation/orchestration.yaml \
-            --region "${AWS_REGION}" > /dev/null && echo "CloudFormation template is valid"
-
-      - name: Package notifier Lambda
-        run: |
-          cd lambda_deployment
-          rm -f notify_pipeline_status.zip
-          zip -r notify_pipeline_status.zip notify_pipeline_status.py
+          aws cloudformation validate-template --template-body file://infra/cloudformation/orchestration.yaml --region "${AWS_REGION}" > /dev/null
+          echo "CloudFormation template is valid"
 
       - name: Deploy orchestration stack
         run: |
@@ -76,26 +71,137 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM \
             --region "$AWS_REGION"
 
-      - name: Deploy notifier Lambda
+      - name: Gather deployment outputs
         run: |
-          aws lambda get-function --function-name "$NOTIFICATION_LAMBDA_NAME" --region "$AWS_REGION" >/dev/null 2>&1 || \
-          aws lambda create-function \
-            --function-name "$NOTIFICATION_LAMBDA_NAME" \
-            --runtime python3.11 \
-            --role "arn:aws:iam::${AWS_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}:role/data-pipeline-notifier-role-$ENVIRONMENT" \
-            --handler notify_pipeline_status.lambda_handler \
-            --zip-file fileb://lambda_deployment/notify_pipeline_status.zip \
-            --region "$AWS_REGION" >/dev/null
+          echo "DATA_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='DataBucketName'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
+          echo "NOTIFICATION_QUEUE_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='NotificationQueueUrl'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
+          echo "NOTIFICATION_TOPIC_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='NotificationTopicArn'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
+          echo "VALIDATION_TRIGGER_QUEUE_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='ValidationTriggerQueueUrl'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
+          echo "VALIDATION_TRIGGER_QUEUE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='ValidationTriggerQueueArn'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
+          echo "INGESTION_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='IngestionLambdaRoleArn'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
+          echo "NOTIFICATION_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='NotificationLambdaRoleArn'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
+          echo "VALIDATION_TRIGGER_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='ValidationTriggerLambdaRoleArn'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
+          echo "GLUE_JOB_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='GlueJobRoleArn'].OutputValue" --output text --region "$AWS_REGION")" >> $GITHUB_ENV
 
-          aws lambda update-function-code \
-            --function-name "$NOTIFICATION_LAMBDA_NAME" \
-            --zip-file fileb://lambda_deployment/notify_pipeline_status.zip \
-            --region "$AWS_REGION" >/dev/null
+      - name: Upload Glue job scripts to S3
+        run: |
+          aws s3 cp Validation/validate_schema.py "s3://$DATA_BUCKET_NAME/scripts/Validation/validate_schema.py"
+          aws s3 cp Transformation/intermediate_transform.py "s3://$DATA_BUCKET_NAME/scripts/Transformation/intermediate_transform.py"
+          aws s3 cp Transformation/transform_data.py "s3://$DATA_BUCKET_NAME/scripts/Transformation/transform_data.py"
 
-      - name: Deploy ingestion Lambda (if exists)
+      - name: Deploy ingestion Lambda
         run: |
           cd lambda_deployment
           rm -f ingest_api_data.zip
           zip -r ingest_api_data.zip ingest_api_data.py
-          aws lambda get-function --function-name ingest-api-data --region "$AWS_REGION" >/dev/null 2>&1 || true
-          aws lambda update-function-code --function-name ingest-api-data --zip-file fileb://lambda_deployment/ingest_api_data.zip --region "$AWS_REGION" >/dev/null || true
+          aws lambda get-function --function-name "$INGESTION_LAMBDA_NAME" --region "$AWS_REGION" >/dev/null 2>&1 || \
+          aws lambda create-function \
+            --function-name "$INGESTION_LAMBDA_NAME" \
+            --runtime python3.11 \
+            --role "$INGESTION_ROLE_ARN" \
+            --handler ingest_api_data.lambda_handler \
+            --zip-file fileb://lambda_deployment/ingest_api_data.zip \
+            --environment "Variables={BUCKET_NAME=$DATA_BUCKET_NAME,RAW_ZONE=raw/countries,VALIDATED_ZONE=validated/countries,ARCHIVE_ZONE=archive/countries,LOG_BUCKET=$DATA_BUCKET_NAME}" \
+            --region "$AWS_REGION" >/dev/null
+          aws lambda update-function-code \
+            --function-name "$INGESTION_LAMBDA_NAME" \
+            --zip-file fileb://lambda_deployment/ingest_api_data.zip \
+            --region "$AWS_REGION" >/dev/null
+          aws lambda update-function-configuration \
+            --function-name "$INGESTION_LAMBDA_NAME" \
+            --environment "Variables={BUCKET_NAME=$DATA_BUCKET_NAME,RAW_ZONE=raw/countries,VALIDATED_ZONE=validated/countries,ARCHIVE_ZONE=archive/countries,LOG_BUCKET=$DATA_BUCKET_NAME}" \
+            --region "$AWS_REGION" >/dev/null
+
+      - name: Deploy notifier Lambda
+        run: |
+          cd lambda_deployment
+          rm -f notify_pipeline_status.zip
+          zip -r notify_pipeline_status.zip notify_pipeline_status.py
+          aws lambda get-function --function-name "$NOTIFICATION_LAMBDA_NAME" --region "$AWS_REGION" >/dev/null 2>&1 || \
+          aws lambda create-function \
+            --function-name "$NOTIFICATION_LAMBDA_NAME" \
+            --runtime python3.11 \
+            --role "$NOTIFICATION_ROLE_ARN" \
+            --handler notify_pipeline_status.lambda_handler \
+            --zip-file fileb://lambda_deployment/notify_pipeline_status.zip \
+            --environment "Variables={NOTIFICATION_QUEUE_URL=$NOTIFICATION_QUEUE_URL,NOTIFICATION_TOPIC_ARN=$NOTIFICATION_TOPIC_ARN}" \
+            --region "$AWS_REGION" >/dev/null
+          aws lambda update-function-code \
+            --function-name "$NOTIFICATION_LAMBDA_NAME" \
+            --zip-file fileb://lambda_deployment/notify_pipeline_status.zip \
+            --region "$AWS_REGION" >/dev/null
+          aws lambda update-function-configuration \
+            --function-name "$NOTIFICATION_LAMBDA_NAME" \
+            --environment "Variables={NOTIFICATION_QUEUE_URL=$NOTIFICATION_QUEUE_URL,NOTIFICATION_TOPIC_ARN=$NOTIFICATION_TOPIC_ARN}" \
+            --region "$AWS_REGION" >/dev/null
+
+      - name: Deploy validation trigger Lambda
+        run: |
+          cd lambda_deployment
+          rm -f trigger_validation.zip
+          zip -r trigger_validation.zip trigger_validation.py
+          aws lambda get-function --function-name "$VALIDATION_TRIGGER_LAMBDA_NAME" --region "$AWS_REGION" >/dev/null 2>&1 || \
+          aws lambda create-function \
+            --function-name "$VALIDATION_TRIGGER_LAMBDA_NAME" \
+            --runtime python3.11 \
+            --role "$VALIDATION_TRIGGER_ROLE_ARN" \
+            --handler trigger_validation.lambda_handler \
+            --zip-file fileb://lambda_deployment/trigger_validation.zip \
+            --environment "Variables={GLUE_JOB_NAME=country-population-validation}" \
+            --region "$AWS_REGION" >/dev/null
+          aws lambda update-function-code \
+            --function-name "$VALIDATION_TRIGGER_LAMBDA_NAME" \
+            --zip-file fileb://lambda_deployment/trigger_validation.zip \
+            --region "$AWS_REGION" >/dev/null
+          aws lambda update-function-configuration \
+            --function-name "$VALIDATION_TRIGGER_LAMBDA_NAME" \
+            --environment "Variables={GLUE_JOB_NAME=country-population-validation}" \
+            --region "$AWS_REGION" >/dev/null
+
+      - name: Connect validation queue to trigger Lambda
+        run: |
+          aws lambda list-event-source-mappings --function-name "$VALIDATION_TRIGGER_LAMBDA_NAME" --region "$AWS_REGION" | grep -q "$VALIDATION_TRIGGER_QUEUE_ARN" || \
+          aws lambda create-event-source-mapping \
+            --function-name "$VALIDATION_TRIGGER_LAMBDA_NAME" \
+            --event-source-arn "$VALIDATION_TRIGGER_QUEUE_ARN" \
+            --batch-size 1 \
+            --region "$AWS_REGION" >/dev/null
+
+      - name: Create Glue jobs
+        run: |
+          VALIDATION_DEFAULT_ARGS='{"--TempDir":"s3://'"$DATA_BUCKET_NAME"'/temp/","--bucket_name":"'"$DATA_BUCKET_NAME"'","--raw_zone":"raw/countries","--validated_zone":"validated/countries","--archive_zone":"archive/countries"}'
+          INTERMEDIATE_DEFAULT_ARGS='{"--TempDir":"s3://'"$DATA_BUCKET_NAME"'/temp/","--bucket_name":"'"$DATA_BUCKET_NAME"'","--validated_zone":"validated/countries","--intermediate_zone":"intermediate/countries"}'
+          TRANSFORMATION_DEFAULT_ARGS='{"--TempDir":"s3://'"$DATA_BUCKET_NAME"'/temp/","--bucket_name":"'"$DATA_BUCKET_NAME"'","--intermediate_zone":"intermediate/countries","--curated_zone":"curated/countries"}'
+
+          aws glue get-job --job-name country-population-validation --region "$AWS_REGION" >/dev/null 2>&1 || \
+          aws glue create-job \
+            --name country-population-validation \
+            --role "$GLUE_JOB_ROLE_ARN" \
+            --command Name=glueetl,ScriptLocation="s3://$DATA_BUCKET_NAME/scripts/Validation/validate_schema.py",PythonVersion=3 \
+            --glue-version 4.0 \
+            --number-of-workers 2 \
+            --worker-type G.1X \
+            --default-arguments "$VALIDATION_DEFAULT_ARGS" \
+            --region "$AWS_REGION" >/dev/null
+
+          aws glue get-job --job-name country-population-intermediate --region "$AWS_REGION" >/dev/null 2>&1 || \
+          aws glue create-job \
+            --name country-population-intermediate \
+            --role "$GLUE_JOB_ROLE_ARN" \
+            --command Name=glueetl,ScriptLocation="s3://$DATA_BUCKET_NAME/scripts/Transformation/intermediate_transform.py",PythonVersion=3 \
+            --glue-version 4.0 \
+            --number-of-workers 2 \
+            --worker-type G.1X \
+            --default-arguments "$INTERMEDIATE_DEFAULT_ARGS" \
+            --region "$AWS_REGION" >/dev/null
+
+          aws glue get-job --job-name country-population-transformation --region "$AWS_REGION" >/dev/null 2>&1 || \
+          aws glue create-job \
+            --name country-population-transformation \
+            --role "$GLUE_JOB_ROLE_ARN" \
+            --command Name=glueetl,ScriptLocation="s3://$DATA_BUCKET_NAME/scripts/Transformation/transform_data.py",PythonVersion=3 \
+            --glue-version 4.0 \
+            --number-of-workers 2 \
+            --worker-type G.1X \
+            --default-arguments "$TRANSFORMATION_DEFAULT_ARGS" \
+            --region "$AWS_REGION" >/dev/null

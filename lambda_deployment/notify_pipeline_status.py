@@ -14,11 +14,13 @@ def lambda_handler(event, context):
     status = payload.get("status", "UNKNOWN")
     stage = payload.get("stage", "pipeline")
     message = payload.get("message", f"{stage} status: {status}")
+    reason = payload.get("reason") or payload.get("error") or payload.get("failureReason")
 
     details = {
         "status": status,
         "stage": stage,
         "message": message,
+        "reason": reason,
         "source": payload.get("source", "stepfunctions"),
         "executionArn": payload.get("executionArn"),
         "timestamp": payload.get("timestamp"),
