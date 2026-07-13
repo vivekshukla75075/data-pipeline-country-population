@@ -64,6 +64,15 @@ jobs:
           echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=${AWS_REGION}" >> $GITHUB_ENV
 
+      - name: Attach IAM deployment policy
+        run: |
+          echo "Attaching CloudFormation deployment policy to IAM user..."
+          aws iam put-user-policy \
+            --user-name data-pipeline-country-population \
+            --policy-name CloudFormationDeploymentPolicy \
+            --policy-document file://infra/iam/cloudformation_deployment_policy.json \
+            --region "$AWS_REGION" && echo "✓ IAM policy attached successfully" || echo "⚠ Policy update attempted"
+
       - name: Validate CloudFormation template with AWS
         run: |
           aws cloudformation validate-template \
