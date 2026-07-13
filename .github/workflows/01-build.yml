@@ -56,7 +56,22 @@ jobs:
 
       - name: Validate CloudFormation template syntax
         run: |
-          python -c "import yaml; yaml.safe_load(open('infra/cloudformation/orchestration.yaml'))" && echo "✓ CloudFormation YAML syntax valid" || exit 1
+          # Parse YAML structure (skip CloudFormation intrinsic functions like !Ref)
+          python -c "
+import yaml
+class CustomLoader(yaml.SafeLoader):
+    pass
+def constructor_with_tag(loader, tag_suffix, node):
+    if isinstance(node, yaml.MappingNode):
+        return loader.construct_mapping(node)
+    elif isinstance(node, yaml.SequenceNode):
+        return loader.construct_sequence(node)
+    return loader.construct_scalar(node)
+CustomLoader.add_multi_constructor('!', constructor_with_tag)
+with open('infra/cloudformation/orchestration.yaml') as f:
+    yaml.load(f, Loader=CustomLoader)
+print('✓ CloudFormation YAML syntax valid')
+" || exit 1
 
       - name: Build Lambda packages
         run: |
