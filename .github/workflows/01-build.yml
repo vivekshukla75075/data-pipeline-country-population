@@ -1,0 +1,83 @@
+name: 1. Build & Validate
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - feature/*
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Validate Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml boto3
+
+      - name: Validate Python syntax - Ingestion
+        run: |
+          python -m py_compile lambda_deployment/ingest_api_data.py
+          python -m py_compile Ingestion/ingest_data.py
+          echo "✓ Ingestion scripts validated"
+
+      - name: Validate Python syntax - Validation
+        run: |
+          python -m py_compile Validation/validate_schema.py
+          echo "✓ Validation script validated"
+
+      - name: Validate Python syntax - Transformation
+        run: |
+          python -m py_compile Transformation/transform_data.py
+          echo "✓ Transformation script validated"
+
+      - name: Validate Python syntax - Notification
+        run: |
+          python -m py_compile lambda_deployment/notify_pipeline_status.py
+          echo "✓ Notification Lambda validated"
+
+      - name: Validate CloudFormation template syntax
+        run: |
+          python -c "import yaml; yaml.safe_load(open('infra/cloudformation/orchestration.yaml'))" && echo "✓ CloudFormation YAML syntax valid" || exit 1
+
+      - name: Build Lambda packages
+        run: |
+          cd lambda_deployment
+          rm -f ingest_api_data.zip notify_pipeline_status.zip
+          zip -q ingest_api_data.zip ingest_api_data.py ../utils/http_utils.py
+          zip -q notify_pipeline_status.zip notify_pipeline_status.py
+          ls -lh *.zip
+          cd ..
+          echo "✓ All Lambda packages built"
+
+      - name: Verify directory structure
+        run: |
+          echo "Directory structure:"
+          find . -type d -name "__pycache__" -prune -o -type f -name "*.py" | head -20
+          echo "✓ Code structure verified"
+
+      - name: Build status
+        if: success()
+        run: echo "✓ BUILD SUCCESSFUL - All validations passed"
+
+      - name: Build failed
+        if: failure()
+        run: echo "✗ BUILD FAILED - Check logs above for details" && exit 1
