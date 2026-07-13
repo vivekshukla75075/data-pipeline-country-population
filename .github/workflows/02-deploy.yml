@@ -70,26 +70,28 @@ jobs:
           aws sts get-caller-identity
           echo "✓ AWS credentials validated"
 
-      - name: Check required IAM permissions
+      - name: Ensure deployment IAM policy is attached
         run: |
-          echo "Checking IAM user has required permissions..."
+          echo "Ensuring IAM user can deploy CloudFormation..."
           POLICY_NAME="CloudFormationDeploymentPolicy"
           IAM_USER="data-pipeline-country-population"
-          
-          # Try to get the policy
-          if aws iam get-user-policy --user-name "$IAM_USER" --policy-name "$POLICY_NAME" >/dev/null 2>&1; then
-            echo "✓ IAM policy '$POLICY_NAME' found on user '$IAM_USER'"
+
+          if aws iam put-user-policy \
+            --user-name "$IAM_USER" \
+            --policy-name "$POLICY_NAME" \
+            --policy-document file://infra/iam/cloudformation_deployment_policy.json >/dev/null 2>&1; then
+            echo "✓ IAM policy '$POLICY_NAME' attached to user '$IAM_USER'"
           else
-            echo "⚠ WARNING: IAM policy '$POLICY_NAME' not found on user '$IAM_USER'"
+            echo "⚠ Unable to attach IAM policy '$POLICY_NAME' to user '$IAM_USER'"
+            echo "  This usually means the AWS credentials do not have iam:PutUserPolicy permission."
+            echo "  Please attach the policy manually or use credentials with IAM permissions."
             echo ""
-            echo "To fix this issue, run locally:"
             echo "  PowerShell: .\attach_iam_policy.ps1"
             echo "  Bash:       bash attach_iam_policy.sh"
             echo ""
-            echo "Or manually attach the policy via AWS Console:"
-            echo "  1. Go to IAM → Users → $IAM_USER"
-            echo "  2. Add inline policy: $POLICY_NAME"
-            echo "  3. Use file: infra/iam/cloudformation_deployment_policy.json"
+            echo "  Or use an admin/role credential with permissions to add inline policies."
+            echo ""
+            echo "  IAM policy file: infra/iam/cloudformation_deployment_policy.json"
             exit 1
           fi
 
