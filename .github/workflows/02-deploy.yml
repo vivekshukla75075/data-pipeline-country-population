@@ -70,36 +70,39 @@ jobs:
           aws sts get-caller-identity
           echo "✓ AWS credentials validated"
 
-      - name: Ensure deployment IAM policy is attached
+      - name: Check CloudFormation deployment permissions
         run: |
-          echo "Ensuring IAM user can deploy CloudFormation..."
-          POLICY_NAME="CloudFormationDeploymentPolicy"
-          IAM_USER="data-pipeline-country-population"
+          echo "Checking CloudFormation deployment permissions..."
+          echo "AWS_ROLE_ARN=${AWS_ROLE_ARN}"
+          aws sts get-caller-identity --query Arn --output text
 
-          if aws iam put-user-policy \
-            --user-name "$IAM_USER" \
-            --policy-name "$POLICY_NAME" \
-            --policy-document file://infra/iam/cloudformation_deployment_policy.json >/dev/null 2>&1; then
-            echo "✓ IAM policy '$POLICY_NAME' attached to user '$IAM_USER'"
+          if [ "${AWS_ROLE_ARN}" != "" ]; then
+            echo "Using assumed role for deployment. Ensure that role has CloudFormation permissions."
           else
-            echo "⚠ Unable to attach IAM policy '$POLICY_NAME' to user '$IAM_USER'"
-            echo "  This usually means the AWS credentials do not have iam:PutUserPolicy permission."
-            echo "  Please attach the policy manually or use credentials with IAM permissions."
-            echo ""
-            echo "  PowerShell: .\attach_iam_policy.ps1"
-            echo "  Bash:       bash attach_iam_policy.sh"
-            echo ""
-            echo "  Or use an admin/role credential with permissions to add inline policies."
-            echo ""
-            echo "  IAM policy file: infra/iam/cloudformation_deployment_policy.json"
+            echo "Using access key credentials. Validating CloudFormation permissions now."
+          fi
+
+          if aws cloudformation validate-template \
+            --template-body file://infra/cloudformation/orchestration.yaml \
+            --region "${AWS_REGION}" >/dev/null; then
+            echo "✓ CloudFormation validate-template works"
+          else
+            echo "✗ CloudFormation validate-template failed"
+            echo "Ensure the AWS principal has cloudformation:ValidateTemplate and cloudformation:CreateStack/UpdateStack permissions."
+            echo "If using access keys, attach the policy in infra/iam/cloudformation_deployment_policy.json to the deploying IAM user."
+            echo "If using role-based deployment, set the AWS_ROLE_ARN secret to a role with these permissions."
             exit 1
           fi
 
-      - name: Validate CloudFormation template with AWS
+      - name: Build Lambda packages
         run: |
-          aws cloudformation validate-template \
-            --template-body file://infra/cloudformation/orchestration.yaml \
-            --region "${AWS_REGION}" > /dev/null && echo "✓ CloudFormation template validated"
+          cd lambda_deployment
+          rm -f ingest_api_data.zip notify_pipeline_status.zip
+          zip -q ingest_api_data.zip ingest_api_data.py ../utils/http_utils.py
+          zip -q notify_pipeline_status.zip notify_pipeline_status.py
+          ls -lh *.zip
+          cd ..
+          echo "✓ Lambda packages ready"
 
       - name: Build Lambda packages
         run: |
