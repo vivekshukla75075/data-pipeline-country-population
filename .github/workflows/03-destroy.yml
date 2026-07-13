@@ -1,0 +1,205 @@
+name: 3. Destroy AWS Resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_name:
+        description: 'CloudFormation stack name to delete'
+        required: false
+        default: 'data-pipeline-orchestration'
+      aws_region:
+        description: 'AWS region'
+        required: false
+        default: 'us-east-1'
+      empty_buckets:
+        description: 'Empty S3 buckets before deletion (required for stack deletion)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      confirmation_token:
+        description: 'Type DELETE_STACK_CONFIRM to confirm'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  destroy:
+    name: Destroy Pipeline Infrastructure
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+      STACK_NAME: ${{ github.event.inputs.stack_name || 'data-pipeline-orchestration' }}
+      EMPTY_BUCKETS: ${{ github.event.inputs.empty_buckets || 'true' }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirmation_token }}" != "DELETE_STACK_CONFIRM" ]; then
+            echo "❌ Deletion not confirmed"
+            echo "You must enter: DELETE_STACK_CONFIRM"
+            exit 1
+          fi
+          echo "✓ Deletion confirmed"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ env.AWS_ROLE_ARN != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials (Access Keys)
+        if: ${{ env.AWS_ROLE_ARN == '' }}
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=${AWS_REGION}" >> $GITHUB_ENV
+
+      - name: Check CloudFormation stack exists
+        run: |
+          echo "Checking if stack exists: $STACK_NAME"
+          if aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "✓ Stack found"
+            aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --query 'Stacks[0].[StackName,StackStatus]' \
+              --output table
+          else
+            echo "⚠ Stack not found: $STACK_NAME"
+            exit 1
+          fi
+
+      - name: Empty S3 buckets
+        if: ${{ env.EMPTY_BUCKETS == 'true' }}
+        run: |
+          echo "Finding S3 buckets created by the stack..."
+          BUCKETS=$(aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | grep -E 'data-pipeline' || true)
+          
+          if [ -z "$BUCKETS" ]; then
+            echo "No matching S3 buckets found"
+          else
+            echo "Found buckets:"
+            echo "$BUCKETS"
+            echo ""
+            echo "Emptying buckets..."
+            for bucket in $BUCKETS; do
+              echo "Processing bucket: $bucket"
+              
+              # Remove all object versions (handles versioned buckets)
+              aws s3api list-object-versions \
+                --bucket "$bucket" \
+                --query 'Versions[].[Key,VersionId]' \
+                --output text | while read key version; do
+                  if [ -n "$key" ]; then
+                    echo "  Deleting: $key (version: $version)"
+                    aws s3api delete-object \
+                      --bucket "$bucket" \
+                      --key "$key" \
+                      --version-id "$version" >/dev/null
+                  fi
+                done
+              
+              # Remove delete markers if any
+              aws s3api list-object-versions \
+                --bucket "$bucket" \
+                --query 'DeleteMarkers[].[Key,VersionId]' \
+                --output text | while read key version; do
+                  if [ -n "$key" ]; then
+                    echo "  Deleting marker: $key (version: $version)"
+                    aws s3api delete-object \
+                      --bucket "$bucket" \
+                      --key "$key" \
+                      --version-id "$version" >/dev/null
+                  fi
+                done
+              
+              echo "✓ Bucket emptied: $bucket"
+            done
+          fi
+
+      - name: Delete CloudFormation stack
+        run: |
+          echo "Deleting CloudFormation stack: $STACK_NAME"
+          aws cloudformation delete-stack \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION"
+          echo "Stack deletion initiated..."
+          
+          echo "Waiting for stack deletion to complete (this may take a few minutes)..."
+          aws cloudformation wait stack-delete-complete \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" || true
+          
+          echo "✓ Stack deletion completed"
+
+      - name: Verify stack deletion
+        run: |
+          echo "Verifying stack deletion..."
+          if aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" >/dev/null 2>&1; then
+            STACK_STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --query 'Stacks[0].StackStatus' \
+              --output text)
+            echo "Stack status: $STACK_STATUS"
+            if [[ "$STACK_STATUS" == "DELETE_COMPLETE" ]]; then
+              echo "✓ Stack successfully deleted"
+            else
+              echo "⚠ Stack may still be deleting. Status: $STACK_STATUS"
+            fi
+          else
+            echo "✓ Stack not found (successfully deleted)"
+          fi
+
+      - name: Cleanup summary
+        if: success()
+        run: |
+          echo "✓ CLEANUP SUCCESSFUL"
+          echo ""
+          echo "Deleted resources:"
+          echo "  - CloudFormation stack: $STACK_NAME"
+          echo "  - Associated Lambda functions"
+          echo "  - Step Functions state machine"
+          echo "  - EventBridge rules"
+          echo "  - SQS queues"
+          echo "  - SNS topics"
+          echo "  - IAM roles"
+          echo ""
+          echo "Note: S3 buckets and their contents have been removed"
+          echo ""
+          echo "To verify cleanup:"
+          echo "1. Check AWS CloudFormation console"
+          echo "2. Check S3 buckets are empty/deleted"
+          echo "3. Check Lambda functions are removed"
+
+      - name: Cleanup failed
+        if: failure()
+        run: |
+          echo "❌ CLEANUP FAILED"
+          echo "Check the logs above for details"
+          exit 1
