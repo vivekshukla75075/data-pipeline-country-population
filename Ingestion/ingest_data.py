@@ -3,6 +3,7 @@
 import sys
 import json
 from datetime import datetime
+from utils.http_utils import decode_response_body
 
 print("=" * 60)
 print("INGESTION JOB START")
@@ -28,9 +29,12 @@ try:
 	try:
 		print("  Attempting urllib method...")
 		import urllib.request
-		request = urllib.request.Request(api_url, headers={'User-Agent': 'Python-ETL'})
+		request = urllib.request.Request(api_url, headers={'User-Agent': 'Python-ETL', 'Accept-Encoding': 'gzip, deflate'})
 		with urllib.request.urlopen(request, timeout=30) as response:
-			data = json.loads(response.read().decode('utf-8'))
+			raw = response.read()
+			headers = {'Content-Encoding': response.getheader('Content-Encoding')}
+			text = decode_response_body(raw, headers)
+			data = json.loads(text)
 		print(f"  ✓ urllib succeeded - fetched {len(data)} records")
 	except Exception as e1:
 		error_msg = str(e1)
@@ -40,9 +44,10 @@ try:
 		try:
 			print("  Attempting requests method...")
 			import requests
-			response = requests.get(api_url, timeout=30, headers={'User-Agent': 'Python-ETL'})
+			response = requests.get(api_url, timeout=30, headers={'User-Agent': 'Python-ETL', 'Accept-Encoding': 'gzip, deflate'})
 			response.raise_for_status()
-			data = response.json()
+			text = decode_response_body(response.content, response.headers)
+			data = json.loads(text)
 			print(f"  ✓ requests succeeded - fetched {len(data)} records")
 		except Exception as e2:
 			print(f"  ✗ requests failed: {str(e2)}")

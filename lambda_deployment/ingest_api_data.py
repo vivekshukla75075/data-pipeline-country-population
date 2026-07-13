@@ -7,6 +7,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 import sys
+from utils.http_utils import decode_response_body
 
 # Initialize S3 client
 try:
@@ -63,7 +64,9 @@ def lambda_handler(event, context):
 			log_messages.append(f"  Sending HTTP request to {api_url}...")
 			
 			with urllib.request.urlopen(req, timeout=30) as response:
-				response_data = response.read().decode('utf-8')
+				raw = response.read()
+				headers = {'Content-Encoding': response.getheader('Content-Encoding')}
+				response_data = decode_response_body(raw, headers)
 				data = json.loads(response_data)
 			
 			log_messages.append(f"✓ API call successful - HTTP 200 OK")
