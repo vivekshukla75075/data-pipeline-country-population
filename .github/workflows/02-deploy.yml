@@ -64,14 +64,34 @@ jobs:
           echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=${AWS_REGION}" >> $GITHUB_ENV
 
-      - name: Attach IAM deployment policy
+      - name: Validate AWS credentials
         run: |
-          echo "Attaching CloudFormation deployment policy to IAM user..."
-          aws iam put-user-policy \
-            --user-name data-pipeline-country-population \
-            --policy-name CloudFormationDeploymentPolicy \
-            --policy-document file://infra/iam/cloudformation_deployment_policy.json \
-            --region "$AWS_REGION" && echo "✓ IAM policy attached successfully" || echo "⚠ Policy update attempted"
+          echo "Validating AWS credentials..."
+          aws sts get-caller-identity
+          echo "✓ AWS credentials validated"
+
+      - name: Check required IAM permissions
+        run: |
+          echo "Checking IAM user has required permissions..."
+          POLICY_NAME="CloudFormationDeploymentPolicy"
+          IAM_USER="data-pipeline-country-population"
+          
+          # Try to get the policy
+          if aws iam get-user-policy --user-name "$IAM_USER" --policy-name "$POLICY_NAME" >/dev/null 2>&1; then
+            echo "✓ IAM policy '$POLICY_NAME' found on user '$IAM_USER'"
+          else
+            echo "⚠ WARNING: IAM policy '$POLICY_NAME' not found on user '$IAM_USER'"
+            echo ""
+            echo "To fix this issue, run locally:"
+            echo "  PowerShell: .\attach_iam_policy.ps1"
+            echo "  Bash:       bash attach_iam_policy.sh"
+            echo ""
+            echo "Or manually attach the policy via AWS Console:"
+            echo "  1. Go to IAM → Users → $IAM_USER"
+            echo "  2. Add inline policy: $POLICY_NAME"
+            echo "  3. Use file: infra/iam/cloudformation_deployment_policy.json"
+            exit 1
+          fi
 
       - name: Validate CloudFormation template with AWS
         run: |
