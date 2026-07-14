@@ -64,8 +64,7 @@ jobs:
               --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
               --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
               --capabilities CAPABILITY_NAMED_IAM \
-              --region "${AWS_REGION}" \
-              --no-fail-on-empty-changeset
+              --region "${AWS_REGION}"
           else
             aws cloudformation create-stack \
               --stack-name "${STACK_NAME}" \
