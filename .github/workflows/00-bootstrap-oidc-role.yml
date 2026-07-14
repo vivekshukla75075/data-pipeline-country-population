@@ -48,6 +48,11 @@ jobs:
           echo "Validating AWS credentials..."
           aws sts get-caller-identity
 
+      - name: Resolve AWS account ID
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "AWS_ACCOUNT_ID=${ACCOUNT_ID}" >> $GITHUB_ENV
+
       - name: Deploy OIDC + Deploy Role (CloudFormation)
         run: |
           echo "Deploying bootstrap stack for environment: ${ENVIRONMENT}"
@@ -60,11 +65,10 @@ jobs:
 
       - name: Output role ARN
         run: |
-          aws cloudformation describe-stacks \
-            --stack-name data-pipeline-github-actions-role-${ENVIRONMENT} \
-            --region ${AWS_REGION} \
-            --query 'Stacks[0].Outputs[?OutputKey==`DeployRoleArn`].OutputValue' \
-            --output text || true
+          ROLE_NAME="data-pipeline-github-actions-deploy-role-${ENVIRONMENT}"
+          ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
+          echo "Role ARN: ${ROLE_ARN}"
+          echo "AWS_ROLE_ARN=${ROLE_ARN}" >> $GITHUB_ENV
 
       - name: Instructions
         run: |
