@@ -90,6 +90,12 @@ jobs:
           echo "Role ARN: ${ROLE_ARN}"
           echo "AWS_ROLE_ARN=${ROLE_ARN}" >> $GITHUB_ENV
 
+      - name: Validate deployed role
+        run: |
+          ROLE_NAME="data-pipeline-github-actions-deploy-role-${ENVIRONMENT}"
+          echo "Checking IAM role trust policy for ${ROLE_NAME}"
+          aws iam get-role --role-name "${ROLE_NAME}" --query 'Role.AssumeRolePolicyDocument' --output json
+
       - name: Instructions
         run: |
           echo "Bootstrap complete. Copy the Role ARN printed above and add it to the repository secret AWS_ROLE_ARN."
