@@ -64,28 +64,16 @@ jobs:
               echo "Deleting failed stack so it can be recreated cleanly"
               aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
               aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
-            else
-              echo "Updating existing stack to apply the latest trust policy and permissions"
-              aws cloudformation update-stack \
-                --stack-name "${STACK_NAME}" \
-                --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
-                --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
-                --capabilities CAPABILITY_NAMED_IAM \
-                --region "${AWS_REGION}" || true
             fi
           fi
 
-          if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
-            echo "Stack exists after recovery attempt; skipping create"
-          else
-            echo "Creating bootstrap stack"
-            aws cloudformation create-stack \
-              --stack-name "${STACK_NAME}" \
-              --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
-              --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --region "${AWS_REGION}"
-          fi
+          echo "Deploying bootstrap stack"
+          aws cloudformation deploy \
+            --template-file infra/cloudformation/github-actions-deploy-role.yaml \
+            --stack-name "${STACK_NAME}" \
+            --parameter-overrides Environment=${ENVIRONMENT} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region "${AWS_REGION}"
 
       - name: Output role ARN
         run: |
