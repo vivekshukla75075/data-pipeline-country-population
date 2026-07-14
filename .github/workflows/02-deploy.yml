@@ -33,6 +33,7 @@ jobs:
       STACK_NAME: data-pipeline-orchestration
       NOTIFICATION_EMAIL: ntvs02011999@gmail.com
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      AWS_ROLE_NAME: ${{ secrets.AWS_ROLE_NAME }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
@@ -51,15 +52,30 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyyaml boto3
 
+      - name: Resolve deployment role
+        shell: bash
+        run: |
+          ROLE_TO_ASSUME=""
+          if [ -n "${AWS_ROLE_ARN}" ]; then
+            ROLE_TO_ASSUME="${AWS_ROLE_ARN}"
+          elif [ -n "${AWS_ROLE_NAME}" ]; then
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            ROLE_TO_ASSUME="arn:aws:iam::${ACCOUNT_ID}:role/${AWS_ROLE_NAME}"
+          fi
+
+          echo "ROLE_TO_ASSUME=${ROLE_TO_ASSUME}" >> "$GITHUB_ENV"
+          echo "Resolved role target: ${ROLE_TO_ASSUME:-<none>}"
+
       - name: Configure AWS credentials (OIDC)
-        if: ${{ env.AWS_ROLE_ARN != '' }}
-        uses: aws-actions/configure-aws-credentials@v4
+        if: ${{ env.ROLE_TO_ASSUME != '' }}
+        uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          role-session-name: github-actions-deploy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Configure AWS credentials (Access Keys)
-        if: ${{ env.AWS_ROLE_ARN == '' }}
+        if: ${{ env.ROLE_TO_ASSUME == '' }}
         run: |
           echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
           echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
@@ -75,9 +91,10 @@ jobs:
         run: |
           echo "Checking CloudFormation deployment permissions..."
           echo "AWS_ROLE_ARN=${AWS_ROLE_ARN}"
+          echo "AWS_ROLE_NAME=${AWS_ROLE_NAME}"
           aws sts get-caller-identity --query Arn --output text
 
-          if [ "${AWS_ROLE_ARN}" != "" ]; then
+          if [ "${ROLE_TO_ASSUME}" != "" ]; then
             echo "Using assumed role for deployment. Ensure that role has CloudFormation permissions."
           else
             echo "Using access key credentials. Validating CloudFormation permissions now."
