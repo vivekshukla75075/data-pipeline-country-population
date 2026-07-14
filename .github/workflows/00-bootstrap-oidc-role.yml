@@ -56,15 +56,23 @@ jobs:
       - name: Deploy OIDC + Deploy Role (CloudFormation)
         run: |
           echo "Deploying bootstrap stack for environment: ${ENVIRONMENT}"
-          if aws cloudformation describe-stacks --stack-name data-pipeline-github-actions-role-${ENVIRONMENT} --region ${AWS_REGION} >/dev/null 2>&1; then
-            echo "Stack already exists; skipping create"
-          else
-            aws cloudformation create-stack \
-              --stack-name data-pipeline-github-actions-role-${ENVIRONMENT} \
+          STACK_NAME="data-pipeline-github-actions-role-${ENVIRONMENT}"
+          if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+            echo "Stack already exists; updating it to apply the latest trust policy and permissions"
+            aws cloudformation update-stack \
+              --stack-name "${STACK_NAME}" \
               --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
               --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
               --capabilities CAPABILITY_NAMED_IAM \
-              --region ${AWS_REGION}
+              --region "${AWS_REGION}" \
+              --no-fail-on-empty-changeset
+          else
+            aws cloudformation create-stack \
+              --stack-name "${STACK_NAME}" \
+              --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
+              --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region "${AWS_REGION}"
           fi
 
       - name: Output role ARN
