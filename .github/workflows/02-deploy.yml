@@ -55,16 +55,36 @@ jobs:
       - name: Resolve deployment role
         shell: bash
         run: |
+          normalize_value() {
+            local value="$1"
+            value="${value//$'\r'/}"
+            value="${value#"${value%%[![:space:]]*}"}"
+            value="${value%"${value##*[![:space:]]}"}"
+            printf '%s' "$value"
+          }
+
           ROLE_TO_ASSUME=""
           if [ -n "${AWS_ROLE_ARN}" ]; then
-            ROLE_TO_ASSUME="${AWS_ROLE_ARN}"
+            ROLE_TO_ASSUME="$(normalize_value "${AWS_ROLE_ARN}")"
+            if [[ ! "$ROLE_TO_ASSUME" =~ ^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/.+ ]]; then
+              echo "AWS_ROLE_ARN is not a valid IAM role ARN: $ROLE_TO_ASSUME"
+              echo "Set the GitHub Actions secret AWS_ROLE_ARN to the full role ARN, for example: arn:aws:iam::123456789012:role/my-role"
+              exit 1
+            fi
           elif [ -n "${AWS_ROLE_NAME}" ]; then
-            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-            ROLE_TO_ASSUME="arn:aws:iam::${ACCOUNT_ID}:role/${AWS_ROLE_NAME}"
+            if [ -n "${AWS_ACCOUNT_ID}" ]; then
+              ROLE_TO_ASSUME="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${AWS_ROLE_NAME}"
+            else
+              echo "AWS_ROLE_NAME was provided but AWS_ACCOUNT_ID is empty. Set AWS_ROLE_ARN to the full role ARN instead."
+              exit 1
+            fi
+          else
+            echo "No AWS_ROLE_ARN or AWS_ROLE_NAME secret was provided. Add the full IAM role ARN to GitHub Actions secrets."
+            exit 1
           fi
 
           echo "ROLE_TO_ASSUME=${ROLE_TO_ASSUME}" >> "$GITHUB_ENV"
-          echo "Resolved role target: ${ROLE_TO_ASSUME:-<none>}"
+          echo "Resolved role target: ${ROLE_TO_ASSUME}"
 
       - name: Configure AWS credentials (OIDC)
         if: ${{ env.ROLE_TO_ASSUME != '' }}
