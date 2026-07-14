@@ -1,0 +1,70 @@
+name: 0. Bootstrap GitHub OIDC deploy role
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment suffix for role name (dev, staging, prod)'
+        required: false
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      aws_region:
+        description: 'AWS region to create role in'
+        required: false
+        default: 'us-east-1'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  bootstrap:
+    name: Bootstrap OIDC Provider and Deploy Role
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (Access Keys)
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate credentials
+        run: |
+          echo "Validating AWS credentials..."
+          aws sts get-caller-identity
+
+      - name: Deploy OIDC + Deploy Role (CloudFormation)
+        run: |
+          echo "Deploying bootstrap stack for environment: ${ENVIRONMENT}"
+          aws cloudformation deploy \
+            --template-file infra/cloudformation/github-actions-deploy-role.yaml \
+            --stack-name data-pipeline-github-actions-role-${ENVIRONMENT} \
+            --parameter-overrides Environment=${ENVIRONMENT} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region ${AWS_REGION}
+
+      - name: Output role ARN
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name data-pipeline-github-actions-role-${ENVIRONMENT} \
+            --region ${AWS_REGION} \
+            --query 'Stacks[0].Outputs[?OutputKey==`DeployRoleArn`].OutputValue' \
+            --output text || true
+
+      - name: Instructions
+        run: |
+          echo "Bootstrap complete. Copy the Role ARN printed above and add it to the repository secret AWS_ROLE_ARN."
+          echo "After setting the secret, run the '2. Deploy to AWS' workflow to deploy the pipeline using OIDC role-based auth."
