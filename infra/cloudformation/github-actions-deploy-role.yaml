@@ -33,7 +33,10 @@ Resources:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
               StringLike:
-                token.actions.githubusercontent.com:sub: !Sub 'repo:vivekshukla75075/data-pipeline-country-population:*'
+                token.actions.githubusercontent.com:sub:
+                  - !Sub 'repo:vivekshukla75075/data-pipeline-country-population:*'
+                  - !Sub 'repo:vivekshukla75075/data-pipeline-country-population:ref:refs/heads/main'
+                  - !Sub 'repo:vivekshukla75075/data-pipeline-country-population:environment:dev'
       Policies:
         - PolicyName: GitHubActionsDeployPolicy
           PolicyDocument:
