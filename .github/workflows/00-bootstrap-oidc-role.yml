@@ -62,16 +62,32 @@ jobs:
             echo "Existing stack status: ${STACK_STATUS:-unknown}"
             if [ "${STACK_STATUS}" = "ROLLBACK_COMPLETE" ] || [ "${STACK_STATUS}" = "CREATE_FAILED" ] || [ "${STACK_STATUS}" = "DELETE_FAILED" ]; then
               echo "Deleting failed stack so it can be recreated cleanly"
-              aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
-              aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
+              aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+              aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+              echo "Creating bootstrap stack"
+              aws cloudformation create-stack \
+                --stack-name "${STACK_NAME}" \
+                --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
+                --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
+                --capabilities CAPABILITY_NAMED_IAM \
+                --region "${AWS_REGION}"
+              aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
             else
               echo "Updating bootstrap stack"
+              set +e
               aws cloudformation update-stack \
                 --stack-name "${STACK_NAME}" \
                 --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
                 --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
                 --capabilities CAPABILITY_NAMED_IAM \
                 --region "${AWS_REGION}"
+              STATUS=$?
+              set -e
+              if [ "$STATUS" -ne 0 ]; then
+                echo "Update stack failed or no updates needed. Checking if stack already exists and is stable."
+              else
+                aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+              fi
             fi
           else
             echo "Creating bootstrap stack"
@@ -81,6 +97,7 @@ jobs:
               --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
               --capabilities CAPABILITY_NAMED_IAM \
               --region "${AWS_REGION}"
+            aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
           fi
 
       - name: Output role ARN
