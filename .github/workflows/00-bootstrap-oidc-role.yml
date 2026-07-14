@@ -64,16 +64,24 @@ jobs:
               echo "Deleting failed stack so it can be recreated cleanly"
               aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
               aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
+            else
+              echo "Updating bootstrap stack"
+              aws cloudformation update-stack \
+                --stack-name "${STACK_NAME}" \
+                --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
+                --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
+                --capabilities CAPABILITY_NAMED_IAM \
+                --region "${AWS_REGION}"
             fi
+          else
+            echo "Creating bootstrap stack"
+            aws cloudformation create-stack \
+              --stack-name "${STACK_NAME}" \
+              --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
+              --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region "${AWS_REGION}"
           fi
-
-          echo "Deploying bootstrap stack"
-          aws cloudformation deploy \
-            --template-file infra/cloudformation/github-actions-deploy-role.yaml \
-            --stack-name "${STACK_NAME}" \
-            --parameter-overrides Environment=${ENVIRONMENT} \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region "${AWS_REGION}"
 
       - name: Output role ARN
         run: |
