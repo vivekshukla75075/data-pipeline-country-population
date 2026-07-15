@@ -62,6 +62,8 @@ Resources:
                   - iam:PutRolePolicy
                   - iam:ListRolePolicies
                   - iam:GetRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
                   - iam:CreateOpenIDConnectProvider
                   - iam:DeleteOpenIDConnectProvider
                   - iam:GetOpenIDConnectProvider
