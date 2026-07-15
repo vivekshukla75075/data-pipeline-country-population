@@ -106,6 +106,8 @@ Resources:
             Principal:
               Service: states.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
       Policies:
         - PolicyName: pipeline-state-machine-policy
           PolicyDocument:
@@ -139,6 +141,8 @@ Resources:
                   - logs:PutResourcePolicy
                   - logs:DescribeResourcePolicies
                   - logs:DescribeLogGroups
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
                 Resource: '*'
       Tags:
         - Key: Project
