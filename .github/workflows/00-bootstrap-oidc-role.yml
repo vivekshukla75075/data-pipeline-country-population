@@ -77,12 +77,16 @@ jobs:
             aws iam delete-role --role-name "${ROLE_NAME}" >/dev/null 2>&1 || true
           fi
 
-          for oidc_arn in $(aws iam list-open-id-connect-providers --query "OpenIDConnectProviderList[?contains(Arn, 'token.actions.githubusercontent.com')].Arn" --output text 2>/dev/null || true); do
-            if [ -n "${oidc_arn}" ]; then
-              echo "Deleting stale GitHub OIDC provider ${oidc_arn}"
-              aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "${oidc_arn}" >/dev/null 2>&1 || true
-            fi
-          done
+          OIDC_PROVIDER_ARN=$(aws iam list-open-id-connect-providers --query "OpenIDConnectProviderList[?contains(Arn, 'token.actions.githubusercontent.com')].Arn" --output text 2>/dev/null || true)
+          if [ -z "${OIDC_PROVIDER_ARN}" ]; then
+            echo "Creating GitHub OIDC provider"
+            aws iam create-open-id-connect-provider \
+              --url https://token.actions.githubusercontent.com \
+              --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1 \
+              --client-id-list sts.amazonaws.com >/dev/null 2>&1 || true
+          else
+            echo "Using existing GitHub OIDC provider ${OIDC_PROVIDER_ARN}"
+          fi
 
           aws cloudformation validate-template --template-body file://infra/cloudformation/github-actions-deploy-role.yaml --region "${AWS_REGION}" >/dev/null
 
@@ -118,6 +122,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          STACK_NAME="data-pipeline-github-actions-role-${ENVIRONMENT}"
           echo "CloudFormation stack events for ${STACK_NAME}:"
           aws cloudformation describe-stack-events \
             --stack-name "${STACK_NAME}" \
