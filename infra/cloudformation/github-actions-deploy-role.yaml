@@ -83,6 +83,10 @@ Resources:
                   - s3:PutBucketTagging
                   - s3:GetBucketTagging
                   - s3:ListAllMyBuckets
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketPublicAccessBlock
                 Resource:
                   - arn:aws:s3:::data-pipeline-*
                   - arn:aws:s3:::data-pipeline-*/*
