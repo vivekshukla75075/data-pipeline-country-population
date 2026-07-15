@@ -186,6 +186,7 @@ Resources:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
+                  - logs:PutRetentionPolicy
                   - logs:DescribeLogGroups
                   - logs:DescribeLogStreams
                   - logs:DeleteLogGroup
