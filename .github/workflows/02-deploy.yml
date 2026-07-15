@@ -1,167 +1,152 @@
 name: 2. Deploy to AWS
 
 on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment environment'
-        required: false
-        default: 'dev'
-        type: choice
-        options:
-          - dev
-          - staging
-          - prod
-      aws_region:
-        description: 'AWS region'
-        required: false
-        default: 'us-east-1'
+workflow_dispatch:
+inputs:
+environment:
+description: 'Deployment environment'
+required: false
+default: 'dev'
+type: choice
+options:
+- dev
+- staging
+- prod
+aws_region:
+description: 'AWS region'
+required: false
+default: 'us-east-1'
 
 permissions:
-  contents: read
+id-token: write        # ✅ REQUIRED for OIDC
+contents: read
 
 jobs:
-  deploy:
-    name: Deploy Pipeline Infrastructure
-    runs-on: ubuntu-latest
-    environment:
-      name: ${{ github.event.inputs.environment || 'dev' }}
-    env:
-      AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
-      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
-      STACK_NAME: data-pipeline-orchestration
-      NOTIFICATION_EMAIL: ntvs02011999@gmail.com
-      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+deploy:
+name: Deploy Pipeline Infrastructure
+runs-on: ubuntu-latest
+environment:
+name: ${{ github.event.inputs.environment || 'dev' }}
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+```
+env:
+  AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+  STACK_NAME: data-pipeline-orchestration
+  NOTIFICATION_EMAIL: ntvs02011999@gmail.com
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+steps:
+  - name: Checkout code
+    uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyyaml boto3
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: '3.11'
 
-      - name: Configure AWS credentials (OIDC)
-        if: ${{ env.AWS_ROLE_ARN != '' }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+  - name: Install dependencies
+    run: |
+      python -m pip install --upgrade pip
+      pip install pyyaml boto3
 
-      - name: Configure AWS credentials (Access Keys)
-        if: ${{ env.AWS_ROLE_ARN == '' }}
-        run: |
-          echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=${AWS_REGION}" >> $GITHUB_ENV
+  # ✅ OIDC Authentication (ONLY THIS, no access keys)
+  - name: Configure AWS credentials (OIDC)
+    uses: aws-actions/configure-aws-credentials@v4
+    with:
+      role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+      aws-region: ${{ env.AWS_REGION }}
 
-      - name: Validate CloudFormation template with AWS
-        run: |
-          aws cloudformation validate-template \
-            --template-body file://infra/cloudformation/orchestration.yaml \
-            --region "${AWS_REGION}" > /dev/null && echo "✓ CloudFormation template validated"
+  - name: Validate AWS credentials
+    run: aws sts get-caller-identity
 
-      - name: Build Lambda packages
-        run: |
-          cd lambda_deployment
-          rm -f ingest_api_data.zip notify_pipeline_status.zip
-          zip -q ingest_api_data.zip ingest_api_data.py ../utils/http_utils.py
-          zip -q notify_pipeline_status.zip notify_pipeline_status.py
-          ls -lh *.zip
-          cd ..
-          echo "✓ Lambda packages ready"
+  - name: Validate CloudFormation template
+    run: |
+      aws cloudformation validate-template \
+        --template-body file://infra/cloudformation/orchestration.yaml \
+        --region "${AWS_REGION}" > /dev/null
+      echo "✓ CloudFormation template validated"
 
-      - name: Deploy CloudFormation stack
-        run: |
-          echo "Deploying stack: $STACK_NAME to region: $AWS_REGION"
-          aws cloudformation deploy \
-            --template-file infra/cloudformation/orchestration.yaml \
-            --stack-name "$STACK_NAME" \
-            --parameter-overrides \
-              Environment=$ENVIRONMENT \
-              NotificationEmail=$NOTIFICATION_EMAIL \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --region "$AWS_REGION" \
-            --no-fail-on-empty-changeset
-          echo "✓ CloudFormation stack deployed"
+  - name: Build Lambda packages
+    run: |
+      cd lambda_deployment
+      rm -f ingest_api_data.zip notify_pipeline_status.zip
+      zip -q ingest_api_data.zip ingest_api_data.py ../utils/http_utils.py
+      zip -q notify_pipeline_status.zip notify_pipeline_status.py
+      ls -lh *.zip
+      cd ..
+      echo "✓ Lambda packages ready"
 
-      - name: Get CloudFormation stack outputs
-        run: |
-          echo "=== Stack Outputs ==="
-          aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --query 'Stacks[0].Outputs' \
-            --output table || echo "No outputs found"
+  - name: Deploy CloudFormation stack
+    run: |
+      echo "Deploying stack: $STACK_NAME to region: $AWS_REGION"
+      aws cloudformation deploy \
+        --template-file infra/cloudformation/orchestration.yaml \
+        --stack-name "$STACK_NAME" \
+        --parameter-overrides \
+          Environment=$ENVIRONMENT \
+          NotificationEmail=$NOTIFICATION_EMAIL \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --region "$AWS_REGION" \
+        --no-fail-on-empty-changeset
+      echo "✓ CloudFormation stack deployed"
 
-      - name: Deploy ingestion Lambda
-        run: |
-          cd lambda_deployment
-          FUNCTION_NAME="ingest-api-data"
-          if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            echo "Updating existing Lambda function: $FUNCTION_NAME"
-            aws lambda update-function-code \
-              --function-name "$FUNCTION_NAME" \
-              --zip-file fileb://ingest_api_data.zip \
-              --region "$AWS_REGION"
-          else
-            echo "Lambda function $FUNCTION_NAME not found in stack, will be created by CloudFormation"
-          fi
-          echo "✓ Ingestion Lambda ready"
+  - name: Get CloudFormation stack outputs
+    run: |
+      echo "=== Stack Outputs ==="
+      aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].Outputs' \
+        --output table || echo "No outputs found"
 
-      - name: Deploy notifier Lambda
-        run: |
-          cd lambda_deployment
-          FUNCTION_NAME="pipeline-status-notifier"
-          if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            echo "Updating existing Lambda function: $FUNCTION_NAME"
-            aws lambda update-function-code \
-              --function-name "$FUNCTION_NAME" \
-              --zip-file fileb://notify_pipeline_status.zip \
-              --region "$AWS_REGION"
-          else
-            echo "Lambda function $FUNCTION_NAME not found in stack, will be created by CloudFormation"
-          fi
-          echo "✓ Notifier Lambda ready"
+  - name: Deploy ingestion Lambda
+    run: |
+      cd lambda_deployment
+      FUNCTION_NAME="ingest-api-data"
+      if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+        echo "Updating existing Lambda function: $FUNCTION_NAME"
+        aws lambda update-function-code \
+          --function-name "$FUNCTION_NAME" \
+          --zip-file fileb://ingest_api_data.zip \
+          --region "$AWS_REGION"
+      else
+        echo "Lambda function will be created by CloudFormation"
+      fi
 
-      - name: Verify deployment
-        run: |
-          echo "=== Verifying Deployment ==="
-          echo "Checking CloudFormation stack status..."
-          aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --query 'Stacks[0].StackStatus' \
-            --output text
-          echo "✓ Deployment verified"
+  - name: Deploy notifier Lambda
+    run: |
+      cd lambda_deployment
+      FUNCTION_NAME="pipeline-status-notifier"
+      if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+        echo "Updating existing Lambda function: $FUNCTION_NAME"
+        aws lambda update-function-code \
+          --function-name "$FUNCTION_NAME" \
+          --zip-file fileb://notify_pipeline_status.zip \
+          --region "$AWS_REGION"
+      else
+        echo "Lambda function will be created by CloudFormation"
+      fi
 
-      - name: Deployment summary
-        if: success()
-        run: |
-          echo "✓ DEPLOYMENT SUCCESSFUL"
-          echo ""
-          echo "Stack Name: $STACK_NAME"
-          echo "Region: $AWS_REGION"
-          echo "Environment: $ENVIRONMENT"
-          echo ""
-          echo "Next steps:"
-          echo "1. Check AWS CloudFormation console for stack details"
-          echo "2. Review S3 buckets created: data-pipeline-country-population*"
-          echo "3. Check Lambda functions for execution logs"
-          echo "4. Verify EventBridge rule is enabled"
+  - name: Verify deployment
+    run: |
+      aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --region "$AWS_REGION" \
+        --query 'Stacks[0].StackStatus' \
+        --output text
 
-      - name: Deployment failed
-        if: failure()
-        run: |
-          echo "✗ DEPLOYMENT FAILED"
-          echo "Check CloudFormation stack events for details"
-          exit 1
+  - name: Deployment summary
+    if: success()
+    run: |
+      echo "✓ DEPLOYMENT SUCCESSFUL"
+      echo "Stack Name: $STACK_NAME"
+      echo "Region: $AWS_REGION"
+      echo "Environment: $ENVIRONMENT"
+
+  - name: Deployment failed
+    if: failure()
+    run: |
+      echo "✗ DEPLOYMENT FAILED"
+      echo "Check CloudFormation stack events"
+      exit 1
+```
