@@ -122,6 +122,24 @@ jobs:
 
       - name: Deploy CloudFormation stack
         run: |
+          set -euo pipefail
+          echo "Checking current stack state for $STACK_NAME"
+
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            STACK_STATUS=$(aws cloudformation describe-stacks \
+              --stack-name "$STACK_NAME" \
+              --region "$AWS_REGION" \
+              --query 'Stacks[0].StackStatus' \
+              --output text 2>/dev/null || true)
+            echo "Current stack status: ${STACK_STATUS:-unknown}"
+
+            if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "CREATE_FAILED" ] || [ "$STACK_STATUS" = "DELETE_FAILED" ] || [ "$STACK_STATUS" = "UPDATE_ROLLBACK_COMPLETE" ] || [ "$STACK_STATUS" = "UPDATE_ROLLBACK_FAILED" ]; then
+              echo "Deleting failed/rollback stack so deployment can proceed"
+              aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
+              aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION" || true
+            fi
+          fi
+
           echo "Deploying stack: $STACK_NAME to region: $AWS_REGION"
           aws cloudformation deploy \
             --template-file infra/cloudformation/orchestration.yaml \
