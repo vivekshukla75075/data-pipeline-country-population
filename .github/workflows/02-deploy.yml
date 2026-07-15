@@ -180,5 +180,10 @@ jobs:
         if: failure()
         run: |
           echo "✗ DEPLOYMENT FAILED"
-          echo "Check CloudFormation stack events"
+          echo "CloudFormation stack events for ${STACK_NAME}:"
+          aws cloudformation describe-stack-events \
+            --stack-name "${STACK_NAME}" \
+            --region "${AWS_REGION}" \
+            --query 'StackEvents[?contains(ResourceStatus, `FAILED`) || contains(ResourceStatus, `ROLLBACK`) || contains(ResourceStatus, `CREATE_FAILED`) || contains(ResourceStatus, `DELETE_FAILED`) || contains(ResourceStatus, `UPDATE_ROLLBACK`)].[Timestamp,ResourceStatus,ResourceType,LogicalResourceId,ResourceStatusReason]' \
+            --output table || true
           exit 1
