@@ -26,7 +26,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -56,7 +56,13 @@ jobs:
 
       - name: Validate CloudFormation template syntax
         run: |
-          python -c "import yaml; yaml.safe_load(open('infra/cloudformation/orchestration.yaml'))" && echo "✓ CloudFormation YAML syntax valid" || exit 1
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+          template = Path("infra/cloudformation/orchestration.yaml").read_text(encoding="utf-8")
+          yaml.compose(template)
+          print("✓ CloudFormation YAML syntax valid")
+          PY
 
       - name: Build Lambda packages
         run: |
