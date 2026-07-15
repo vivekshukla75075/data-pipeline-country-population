@@ -90,12 +90,12 @@ jobs:
 
       - name: Validate CloudFormation template
         run: |
+          set -euo pipefail
           echo "Checking CloudFormation deployment permissions..."
           echo "AWS_ROLE_ARN=${AWS_ROLE_ARN}"
-          echo "AWS_ROLE_NAME=${AWS_ROLE_NAME}"
           aws sts get-caller-identity --query Arn --output text
 
-          if [ "${ROLE_TO_ASSUME}" != "" ]; then
+          if [ -n "${AWS_ROLE_ARN}" ]; then
             echo "Using assumed role for deployment. Ensure that role has CloudFormation permissions."
           else
             echo "Using access key credentials. Validating CloudFormation permissions now."
@@ -103,8 +103,12 @@ jobs:
 
           if aws cloudformation validate-template \
             --template-body file://infra/cloudformation/orchestration.yaml \
-            --region "${AWS_REGION}" >/dev/null
-          echo "✓ CloudFormation template validated"
+            --region "${AWS_REGION}" >/dev/null; then
+            echo "✓ CloudFormation template validated"
+          else
+            echo "✗ CloudFormation template validation failed"
+            exit 1
+          fi
 
       - name: Build Lambda packages
         run: |
