@@ -38,6 +38,7 @@ Resources:
                   - cloudformation:DescribeStackEvents
                   - cloudformation:DescribeStackResources
                   - cloudformation:ValidateTemplate
+                  - cloudformation:GetTemplateSummary
                   - cloudformation:ListStacks
                   - cloudformation:GetTemplate
                   - cloudformation:CreateChangeSet
@@ -77,6 +78,8 @@ Resources:
                   - s3:DeleteBucket
                   - s3:GetBucketVersioning
                   - s3:PutBucketVersioning
+                  - s3:PutBucketTagging
+                  - s3:GetBucketTagging
                   - s3:ListAllMyBuckets
                 Resource:
                   - arn:aws:s3:::data-pipeline-*
@@ -127,6 +130,8 @@ Resources:
                   - sns:Unsubscribe
                   - sns:GetTopicAttributes
                   - sns:ListTopics
+                  - sns:TagResource
+                  - sns:UntagResource
                 Resource: "*"
 
               - Effect: Allow
@@ -138,6 +143,8 @@ Resources:
                   - sqs:GetQueueAttributes
                   - sqs:SetQueueAttributes
                   - sqs:ListQueues
+                  - sqs:TagQueue
+                  - sqs:UntagQueue
                 Resource: "*"
 
               - Effect: Allow
@@ -167,6 +174,8 @@ Resources:
                   - logs:ListLogDeliveries
                   - logs:PutResourcePolicy
                   - logs:DescribeResourcePolicies
+                  - logs:TagLogGroup
+                  - logs:UntagLogGroup
                 Resource: "*"
 
 Outputs:
