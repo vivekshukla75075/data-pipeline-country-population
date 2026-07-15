@@ -54,40 +54,53 @@ jobs:
           echo "AWS_ACCOUNT_ID=${ACCOUNT_ID}" >> $GITHUB_ENV
 
       - name: Deploy OIDC + Deploy Role (CloudFormation)
+        shell: bash
         run: |
+          set -euo pipefail
+
           echo "Deploying bootstrap stack for environment: ${ENVIRONMENT}"
           STACK_NAME="data-pipeline-github-actions-role-${ENVIRONMENT}"
+          ROLE_NAME="data-pipeline-github-actions-deploy-role-${ENVIRONMENT}"
+
           if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
             STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
             echo "Existing stack status: ${STACK_STATUS:-unknown}"
             if [ "${STACK_STATUS}" = "ROLLBACK_COMPLETE" ] || [ "${STACK_STATUS}" = "CREATE_FAILED" ] || [ "${STACK_STATUS}" = "DELETE_FAILED" ] || [ "${STACK_STATUS}" = "UPDATE_ROLLBACK_COMPLETE" ] || [ "${STACK_STATUS}" = "UPDATE_ROLLBACK_FAILED" ]; then
               echo "Deleting failed stack so it can be recreated cleanly"
-              aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
-              aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
-              echo "Creating bootstrap stack"
-              aws cloudformation create-stack \
-                --stack-name "${STACK_NAME}" \
-                --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
-                --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
-                --capabilities CAPABILITY_NAMED_IAM \
-                --region "${AWS_REGION}"
-              aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+              aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
+              aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}" || true
+            fi
+          fi
+
+          if aws iam get-role --role-name "${ROLE_NAME}" >/dev/null 2>&1; then
+            echo "Deleting stale IAM role ${ROLE_NAME}"
+            aws iam delete-role --role-name "${ROLE_NAME}" >/dev/null 2>&1 || true
+          fi
+
+          for oidc_arn in $(aws iam list-open-id-connect-providers --query "OpenIDConnectProviderList[?contains(Arn, 'token.actions.githubusercontent.com')].Arn" --output text 2>/dev/null || true); do
+            if [ -n "${oidc_arn}" ]; then
+              echo "Deleting stale GitHub OIDC provider ${oidc_arn}"
+              aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "${oidc_arn}" >/dev/null 2>&1 || true
+            fi
+          done
+
+          aws cloudformation validate-template --template-body file://infra/cloudformation/github-actions-deploy-role.yaml --region "${AWS_REGION}" >/dev/null
+
+          if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+            echo "Updating bootstrap stack"
+            set +e
+            aws cloudformation update-stack \
+              --stack-name "${STACK_NAME}" \
+              --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
+              --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region "${AWS_REGION}"
+            STATUS=$?
+            set -e
+            if [ "$STATUS" -ne 0 ]; then
+              echo "Update stack failed or no updates needed. Checking if stack already exists and is stable."
             else
-              echo "Updating bootstrap stack"
-              set +e
-              aws cloudformation update-stack \
-                --stack-name "${STACK_NAME}" \
-                --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
-                --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
-                --capabilities CAPABILITY_NAMED_IAM \
-                --region "${AWS_REGION}"
-              STATUS=$?
-              set -e
-              if [ "$STATUS" -ne 0 ]; then
-                echo "Update stack failed or no updates needed. Checking if stack already exists and is stable."
-              else
-                aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
-              fi
+              aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
             fi
           else
             echo "Creating bootstrap stack"
@@ -99,6 +112,18 @@ jobs:
               --region "${AWS_REGION}"
             aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
           fi
+
+      - name: Show CloudFormation events on failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CloudFormation stack events for ${STACK_NAME}:"
+          aws cloudformation describe-stack-events \
+            --stack-name "${STACK_NAME}" \
+            --region "${AWS_REGION}" \
+            --query 'StackEvents[?contains(ResourceStatus, `FAILED`) || contains(ResourceStatus, `ROLLBACK`)].[Timestamp,ResourceStatus,ResourceType,LogicalResourceId,ResourceStatusReason]' \
+            --output table || true
 
       - name: Output role ARN
         run: |
