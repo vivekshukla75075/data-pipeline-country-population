@@ -1,6 +1,11 @@
 name: 2. Deploy to AWS
 
 on:
+  push:
+    branches:
+      - main
+      - master
+      - feature/*
   workflow_dispatch:
     inputs:
       environment:
