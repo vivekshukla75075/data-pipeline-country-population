@@ -474,22 +474,6 @@ Resources:
       LogGroupName: !Sub '/aws/states/${StateMachineName}-${Environment}'
       RetentionInDays: 14
 
-  IngestionLambdaInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${IngestionLambdaName}'
-      Principal: states.amazonaws.com
-      SourceArn: !Ref PipelineStateMachine
-
-  NotificationLambdaInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${NotificationLambdaName}'
-      Principal: states.amazonaws.com
-      SourceArn: !Ref PipelineStateMachine
-
   PipelineScheduleRule:
     Type: AWS::Events::Rule
     Properties:

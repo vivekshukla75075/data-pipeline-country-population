@@ -150,33 +150,81 @@ jobs:
             --no-fail-on-empty-changeset
           echo "✓ CloudFormation stack deployed"
 
-      - name: Deploy ingestion Lambda
+      - name: Deploy Lambda functions and invoke permissions
         run: |
+          set -euo pipefail
           cd lambda_deployment
-          FUNCTION_NAME="ingest-api-data"
-          if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            echo "Updating existing Lambda function: $FUNCTION_NAME"
-            aws lambda update-function-code \
-              --function-name "$FUNCTION_NAME" \
-              --zip-file fileb://ingest_api_data.zip \
-              --region "$AWS_REGION"
-          else
-            echo "Lambda function will be created by CloudFormation"
-          fi
 
-      - name: Deploy notifier Lambda
-        run: |
-          cd lambda_deployment
-          FUNCTION_NAME="pipeline-status-notifier"
-          if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            echo "Updating existing Lambda function: $FUNCTION_NAME"
-            aws lambda update-function-code \
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          STATE_MACHINE_ARN=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`StateMachineArn`].OutputValue | [0]' \
+            --output text)
+          DATA_BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`DataBucketName`].OutputValue | [0]' \
+            --output text)
+          NOTIFICATION_QUEUE_URL=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`NotificationQueueUrl`].OutputValue | [0]' \
+            --output text)
+          NOTIFICATION_TOPIC_ARN=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`NotificationTopicArn`].OutputValue | [0]' \
+            --output text)
+
+          deploy_lambda() {
+            local FUNCTION_NAME="$1"
+            local HANDLER="$2"
+            local ZIP_FILE="$3"
+            local ROLE_NAME="$4"
+            local ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+            local ENV_VARS="$5"
+
+            if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+              echo "Updating existing Lambda function: $FUNCTION_NAME"
+              aws lambda update-function-code \
+                --function-name "$FUNCTION_NAME" \
+                --zip-file "fileb://${ZIP_FILE}" \
+                --region "$AWS_REGION" >/dev/null
+              aws lambda update-function-configuration \
+                --function-name "$FUNCTION_NAME" \
+                --role "$ROLE_ARN" \
+                --handler "$HANDLER" \
+                --runtime python3.11 \
+                --timeout 60 \
+                --memory-size 128 \
+                --environment "$ENV_VARS" \
+                --region "$AWS_REGION" >/dev/null
+            else
+              echo "Creating Lambda function: $FUNCTION_NAME"
+              aws lambda create-function \
+                --function-name "$FUNCTION_NAME" \
+                --runtime python3.11 \
+                --role "$ROLE_ARN" \
+                --handler "$HANDLER" \
+                --zip-file "fileb://${ZIP_FILE}" \
+                --timeout 60 \
+                --memory-size 128 \
+                --environment "$ENV_VARS" \
+                --region "$AWS_REGION" >/dev/null
+            fi
+
+            aws lambda add-permission \
               --function-name "$FUNCTION_NAME" \
-              --zip-file fileb://notify_pipeline_status.zip \
-              --region "$AWS_REGION"
-          else
-            echo "Lambda function will be created by CloudFormation"
-          fi
+              --statement-id "AllowStateMachineInvoke" \
+              --action lambda:InvokeFunction \
+              --principal states.amazonaws.com \
+              --source-arn "$STATE_MACHINE_ARN" \
+              --region "$AWS_REGION" >/dev/null 2>&1 || true
+          }
+
+          deploy_lambda "ingest-api-data" "ingest_api_data.lambda_handler" "ingest_api_data.zip" "data-pipeline-ingestion-role-${ENVIRONMENT}" "Variables={BUCKET_NAME=${DATA_BUCKET_NAME},RAW_ZONE=raw/countries}"
+          deploy_lambda "pipeline-status-notifier" "notify_pipeline_status.lambda_handler" "notify_pipeline_status.zip" "data-pipeline-notifier-role-${ENVIRONMENT}" "Variables={NOTIFICATION_QUEUE_URL=${NOTIFICATION_QUEUE_URL},NOTIFICATION_TOPIC_ARN=${NOTIFICATION_TOPIC_ARN}}"
 
       - name: Verify deployment
         run: |
