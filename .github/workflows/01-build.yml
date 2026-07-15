@@ -54,7 +54,7 @@ jobs:
           python -m py_compile lambda_deployment/notify_pipeline_status.py
           echo "✓ Notification Lambda validated"
 
-      - name: Validate CloudFormation template syntax
+      - name: Validate CloudFormation template file
         run: |
           python - <<'PY'
           from pathlib import Path
