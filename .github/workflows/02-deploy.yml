@@ -53,6 +53,7 @@ jobs:
           pip install pyyaml boto3
 
       - name: Resolve deployment role
+        id: resolve-role
         shell: bash
         run: |
           normalize_value() {
@@ -84,18 +85,19 @@ jobs:
           fi
 
           echo "ROLE_TO_ASSUME=${ROLE_TO_ASSUME}" >> "$GITHUB_ENV"
+          echo "role_to_assume=${ROLE_TO_ASSUME}" >> "$GITHUB_OUTPUT"
           echo "Resolved role target: ${ROLE_TO_ASSUME}"
 
       - name: Configure AWS credentials (OIDC)
-        if: ${{ env.ROLE_TO_ASSUME != '' }}
+        if: ${{ steps.resolve-role.outputs.role_to_assume != '' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ env.ROLE_TO_ASSUME }}
+          role-to-assume: ${{ steps.resolve-role.outputs.role_to_assume }}
           role-session-name: github-actions-deploy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Configure AWS credentials (Access Keys)
-        if: ${{ env.ROLE_TO_ASSUME == '' }}
+        if: ${{ steps.resolve-role.outputs.role_to_assume == '' }}
         run: |
           echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
           echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV

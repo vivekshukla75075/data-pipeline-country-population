@@ -77,6 +77,17 @@
       ]
     },
     {
+      "Sid": "OIDCProviderPermissions",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateOpenIDConnectProvider",
+        "iam:DeleteOpenIDConnectProvider",
+        "iam:GetOpenIDConnectProvider",
+        "iam:ListOpenIDConnectProviders"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "StepFunctionsPermissions",
       "Effect": "Allow",
       "Action": [

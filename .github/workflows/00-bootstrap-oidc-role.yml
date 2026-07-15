@@ -60,7 +60,7 @@ jobs:
           if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
             STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
             echo "Existing stack status: ${STACK_STATUS:-unknown}"
-            if [ "${STACK_STATUS}" = "ROLLBACK_COMPLETE" ] || [ "${STACK_STATUS}" = "CREATE_FAILED" ] || [ "${STACK_STATUS}" = "DELETE_FAILED" ]; then
+            if [ "${STACK_STATUS}" = "ROLLBACK_COMPLETE" ] || [ "${STACK_STATUS}" = "CREATE_FAILED" ] || [ "${STACK_STATUS}" = "DELETE_FAILED" ] || [ "${STACK_STATUS}" = "UPDATE_ROLLBACK_COMPLETE" ] || [ "${STACK_STATUS}" = "UPDATE_ROLLBACK_FAILED" ]; then
               echo "Deleting failed stack so it can be recreated cleanly"
               aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
               aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
