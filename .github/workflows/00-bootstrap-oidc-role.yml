@@ -1,0 +1,119 @@
+name: 0. Bootstrap GitHub OIDC deploy role
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment suffix for role name (dev, staging, prod)'
+        required: false
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      aws_region:
+        description: 'AWS region to create role in'
+        required: false
+        default: 'us-east-1'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  bootstrap:
+    name: Bootstrap OIDC Provider and Deploy Role
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (Access Keys)
+        if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate credentials
+        run: |
+          echo "Validating AWS credentials..."
+          aws sts get-caller-identity
+
+      - name: Resolve AWS account ID
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "AWS_ACCOUNT_ID=${ACCOUNT_ID}" >> $GITHUB_ENV
+
+      - name: Deploy OIDC + Deploy Role (CloudFormation)
+        run: |
+          echo "Deploying bootstrap stack for environment: ${ENVIRONMENT}"
+          STACK_NAME="data-pipeline-github-actions-role-${ENVIRONMENT}"
+          if aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" >/dev/null 2>&1; then
+            STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "${STACK_NAME}" --region "${AWS_REGION}" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)
+            echo "Existing stack status: ${STACK_STATUS:-unknown}"
+            if [ "${STACK_STATUS}" = "ROLLBACK_COMPLETE" ] || [ "${STACK_STATUS}" = "CREATE_FAILED" ] || [ "${STACK_STATUS}" = "DELETE_FAILED" ] || [ "${STACK_STATUS}" = "UPDATE_ROLLBACK_COMPLETE" ] || [ "${STACK_STATUS}" = "UPDATE_ROLLBACK_FAILED" ]; then
+              echo "Deleting failed stack so it can be recreated cleanly"
+              aws cloudformation delete-stack --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+              aws cloudformation wait stack-delete-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+              echo "Creating bootstrap stack"
+              aws cloudformation create-stack \
+                --stack-name "${STACK_NAME}" \
+                --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
+                --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
+                --capabilities CAPABILITY_NAMED_IAM \
+                --region "${AWS_REGION}"
+              aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+            else
+              echo "Updating bootstrap stack"
+              set +e
+              aws cloudformation update-stack \
+                --stack-name "${STACK_NAME}" \
+                --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
+                --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
+                --capabilities CAPABILITY_NAMED_IAM \
+                --region "${AWS_REGION}"
+              STATUS=$?
+              set -e
+              if [ "$STATUS" -ne 0 ]; then
+                echo "Update stack failed or no updates needed. Checking if stack already exists and is stable."
+              else
+                aws cloudformation wait stack-update-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+              fi
+            fi
+          else
+            echo "Creating bootstrap stack"
+            aws cloudformation create-stack \
+              --stack-name "${STACK_NAME}" \
+              --template-body file://infra/cloudformation/github-actions-deploy-role.yaml \
+              --parameters ParameterKey=Environment,ParameterValue=${ENVIRONMENT} \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region "${AWS_REGION}"
+            aws cloudformation wait stack-create-complete --stack-name "${STACK_NAME}" --region "${AWS_REGION}"
+          fi
+
+      - name: Output role ARN
+        run: |
+          ROLE_NAME="data-pipeline-github-actions-deploy-role-${ENVIRONMENT}"
+          ROLE_ARN="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ROLE_NAME}"
+          echo "Role ARN: ${ROLE_ARN}"
+          echo "AWS_ROLE_ARN=${ROLE_ARN}" >> $GITHUB_ENV
+
+      - name: Validate deployed role
+        run: |
+          ROLE_NAME="data-pipeline-github-actions-deploy-role-${ENVIRONMENT}"
+          echo "Checking IAM role trust policy for ${ROLE_NAME}"
+          aws iam get-role --role-name "${ROLE_NAME}" --query 'Role.AssumeRolePolicyDocument' --output json
+
+      - name: Instructions
+        run: |
+          echo "Bootstrap complete. Copy the Role ARN printed above and add it to the repository secret AWS_ROLE_ARN."
+          echo "After setting the secret, run the '2. Deploy to AWS' workflow to deploy the pipeline using OIDC role-based auth."

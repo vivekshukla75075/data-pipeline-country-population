@@ -85,7 +85,18 @@ jobs:
 
       - name: Validate CloudFormation template
         run: |
-          aws cloudformation validate-template \
+          echo "Checking CloudFormation deployment permissions..."
+          echo "AWS_ROLE_ARN=${AWS_ROLE_ARN}"
+          echo "AWS_ROLE_NAME=${AWS_ROLE_NAME}"
+          aws sts get-caller-identity --query Arn --output text
+
+          if [ "${ROLE_TO_ASSUME}" != "" ]; then
+            echo "Using assumed role for deployment. Ensure that role has CloudFormation permissions."
+          else
+            echo "Using access key credentials. Validating CloudFormation permissions now."
+          fi
+
+          if aws cloudformation validate-template \
             --template-body file://infra/cloudformation/orchestration.yaml \
             --region "${AWS_REGION}" >/dev/null
           echo "✓ CloudFormation template validated"

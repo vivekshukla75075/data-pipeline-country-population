@@ -60,6 +60,34 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  PipelineDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'data-pipeline-${Environment}-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  ValidationTriggerQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'data-pipeline-validation-trigger-${Environment}'
+      MessageRetentionPeriod: 1209600
+      VisibilityTimeout: 60
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
   PipelineNotificationSubscription:
     Type: AWS::SNS::Subscription
     Properties:
@@ -93,6 +121,10 @@ Resources:
                 Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${NotificationLambdaName}'
               - Effect: Allow
                 Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt ValidationTriggerQueue.Arn
+              - Effect: Allow
+                Action:
                   - glue:StartJobRun
                   - glue:GetJobRun
                   - glue:GetJobRuns
@@ -107,6 +139,73 @@ Resources:
                   - logs:PutResourcePolicy
                   - logs:DescribeResourcePolicies
                   - logs:DescribeLogGroups
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  IngestionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'data-pipeline-ingestion-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: s3-write-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt PipelineDataBucket.Arn
+                  - !Sub '${PipelineDataBucket.Arn}/*'
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  ValidationTriggerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'data-pipeline-validation-trigger-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: validation-trigger-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt ValidationTriggerQueue.Arn
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
                 Resource: '*'
       Tags:
         - Key: Project
@@ -140,6 +239,38 @@ Resources:
                 Action:
                   - sns:Publish
                 Resource: !Ref PipelineNotificationTopic
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'data-pipeline-glue-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: glue-s3-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt PipelineDataBucket.Arn
+                  - !Sub '${PipelineDataBucket.Arn}/*'
       Tags:
         - Key: Project
           Value: data-pipeline-country-population
@@ -211,16 +342,47 @@ Resources:
                 {
                   "Variable": "$.Payload.statusCode",
                   "NumericEquals": 200,
-                  "Next": "StartValidation"
+                  "Next": "SendValidationTrigger"
                 }
               ],
               "Default": "NotifyFailure"
+            },
+            "SendValidationTrigger": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sqs:sendMessage",
+              "Parameters": {
+                "QueueUrl": "${ValidationTriggerQueue}",
+                "MessageBody.$": "States.JsonToString({\"source\":\"ingestion\",\"status\":\"ready_for_validation\",\"jobName\":\"${ValidationJobName}\"})"
+              },
+              "Next": "StartValidation"
             },
             "StartValidation": {
               "Type": "Task",
               "Resource": "arn:aws:states:::glue:startJobRun.sync",
               "Parameters": {
                 "JobName": "${ValidationJobName}"
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 20,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "StartIntermediate",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "NotifyFailure"
+                }
+              ]
+            },
+            "StartIntermediate": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "country-population-intermediate"
               },
               "Retry": [
                 {
@@ -341,9 +503,30 @@ Outputs:
   StateMachineArn:
     Description: ARN of the Step Functions state machine
     Value: !Ref PipelineStateMachine
+  DataBucketName:
+    Description: Name of the S3 data lake bucket
+    Value: !Ref PipelineDataBucket
+  IngestionLambdaRoleArn:
+    Description: IAM role ARN for the ingestion Lambda
+    Value: !GetAtt IngestionLambdaRole.Arn
+  ValidationTriggerLambdaRoleArn:
+    Description: IAM role ARN for the validation-trigger Lambda
+    Value: !GetAtt ValidationTriggerLambdaRole.Arn
+  NotificationLambdaRoleArn:
+    Description: IAM role ARN for the notification Lambda
+    Value: !GetAtt PipelineNotificationLambdaRole.Arn
+  GlueJobRoleArn:
+    Description: IAM role ARN for the Glue jobs
+    Value: !GetAtt GlueJobRole.Arn
   NotificationQueueUrl:
     Description: URL of the SQS notification queue
     Value: !Ref PipelineNotificationQueue
   NotificationTopicArn:
     Description: ARN of the SNS notification topic
     Value: !Ref PipelineNotificationTopic
+  ValidationTriggerQueueUrl:
+    Description: URL of the validation trigger SQS queue
+    Value: !Ref ValidationTriggerQueue
+  ValidationTriggerQueueArn:
+    Description: ARN of the validation trigger SQS queue
+    Value: !GetAtt ValidationTriggerQueue.Arn
