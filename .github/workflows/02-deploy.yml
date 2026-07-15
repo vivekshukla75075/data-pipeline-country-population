@@ -177,6 +177,36 @@ jobs:
             --query 'Stacks[0].Outputs[?OutputKey==`NotificationTopicArn`].OutputValue | [0]' \
             --output text)
 
+          wait_for_lambda_ready() {
+            local FUNCTION_NAME="$1"
+            local attempt=0
+            while true; do
+              local state
+              local last_update_status
+              state=$(aws lambda get-function-configuration \
+                --function-name "$FUNCTION_NAME" \
+                --region "$AWS_REGION" \
+                --query 'State' --output text 2>/dev/null || echo "Unknown")
+              last_update_status=$(aws lambda get-function-configuration \
+                --function-name "$FUNCTION_NAME" \
+                --region "$AWS_REGION" \
+                --query 'LastUpdateStatus' --output text 2>/dev/null || echo "Unknown")
+
+              if [ "$state" = "Active" ] && [ "$last_update_status" != "InProgress" ] && [ "$last_update_status" != "Failed" ]; then
+                break
+              fi
+
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 30 ]; then
+                echo "ERROR: Lambda function $FUNCTION_NAME is not ready after 150 seconds (state=$state, last_update_status=$last_update_status)"
+                exit 1
+              fi
+
+              echo "Waiting for Lambda $FUNCTION_NAME to become ready (state=$state, last_update_status=$last_update_status)..."
+              sleep 5
+            done
+          }
+
           deploy_lambda() {
             local FUNCTION_NAME="$1"
             local HANDLER="$2"
@@ -187,6 +217,7 @@ jobs:
 
             if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
               echo "Updating existing Lambda function: $FUNCTION_NAME"
+              wait_for_lambda_ready "$FUNCTION_NAME"
               aws lambda update-function-code \
                 --function-name "$FUNCTION_NAME" \
                 --zip-file "fileb://${ZIP_FILE}" \
@@ -214,6 +245,7 @@ jobs:
                 --region "$AWS_REGION" >/dev/null
             fi
 
+            wait_for_lambda_ready "$FUNCTION_NAME"
             aws lambda add-permission \
               --function-name "$FUNCTION_NAME" \
               --statement-id "AllowStateMachineInvoke" \
