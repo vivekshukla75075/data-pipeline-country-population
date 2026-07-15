@@ -4,22 +4,31 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Deployment environment'
+        description: "Deployment environment"
         required: false
-        default: 'dev'
+        default: "dev"
         type: choice
         options:
           - dev
           - staging
           - prod
       aws_region:
-        description: 'AWS region'
+        description: "AWS region"
         required: false
-        default: 'us-east-1'
+        default: "us-east-1"
 
 permissions:
   contents: read
   id-token: write
+
+env:
+  AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+  STACK_NAME: data-pipeline-orchestration
+  NOTIFICATION_EMAIL: ntvs02011999@gmail.com
+  AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
 jobs:
   deploy:
@@ -27,16 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
-    env:
-      AWS_REGION: ${{ github.event.inputs.aws_region || 'us-east-1' }}
-      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
-      STACK_NAME: data-pipeline-orchestration
-      NOTIFICATION_EMAIL: ntvs02011999@gmail.com
-      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-      AWS_ROLE_NAME: ${{ secrets.AWS_ROLE_NAME }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
 
     steps:
       - name: Checkout code
@@ -45,71 +44,46 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyyaml boto3
 
-      - name: Resolve deployment role
-        id: resolve-role
+      - name: Resolve AWS auth mode
+        id: aws-auth
         shell: bash
         run: |
-          normalize_value() {
-            local value="$1"
-            value="${value//$'\r'/}"
-            value="${value#"${value%%[![:space:]]*}"}"
-            value="${value%"${value##*[![:space:]]}"}"
-            printf '%s' "$value"
-          }
-
-          ROLE_TO_ASSUME=""
           if [ -n "${AWS_ROLE_ARN}" ]; then
-            ROLE_TO_ASSUME="$(normalize_value "${AWS_ROLE_ARN}")"
-            if [[ ! "$ROLE_TO_ASSUME" =~ ^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/.+ ]]; then
-              echo "AWS_ROLE_ARN is not a valid IAM role ARN: $ROLE_TO_ASSUME"
-              echo "Set the GitHub Actions secret AWS_ROLE_ARN to the full role ARN, for example: arn:aws:iam::123456789012:role/my-role"
-              exit 1
-            fi
-          elif [ -n "${AWS_ROLE_NAME}" ]; then
-            if [ -n "${AWS_ACCOUNT_ID}" ]; then
-              ROLE_TO_ASSUME="arn:aws:iam::${AWS_ACCOUNT_ID}:role/${AWS_ROLE_NAME}"
-            else
-              echo "AWS_ROLE_NAME was provided but AWS_ACCOUNT_ID is empty. Set AWS_ROLE_ARN to the full role ARN instead."
-              exit 1
-            fi
+            echo "using_oidc=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "${AWS_ACCESS_KEY_ID}" ] && [ -n "${AWS_SECRET_ACCESS_KEY}" ]; then
+            echo "using_oidc=false" >> "$GITHUB_OUTPUT"
           else
-            echo "No AWS_ROLE_ARN or AWS_ROLE_NAME secret was provided. Add the full IAM role ARN to GitHub Actions secrets."
+            echo "::error::Set AWS_ROLE_ARN for OIDC deployment or provide AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY."
             exit 1
           fi
 
-          echo "ROLE_TO_ASSUME=${ROLE_TO_ASSUME}" >> "$GITHUB_ENV"
-          echo "role_to_assume=${ROLE_TO_ASSUME}" >> "$GITHUB_OUTPUT"
-          echo "Resolved role target: ${ROLE_TO_ASSUME}"
-
       - name: Configure AWS credentials (OIDC)
-        if: ${{ steps.resolve-role.outputs.role_to_assume != '' }}
-        uses: aws-actions/configure-aws-credentials@v5
+        if: ${{ steps.aws-auth.outputs.using_oidc == 'true' }}
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ steps.resolve-role.outputs.role_to_assume }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
           role-session-name: github-actions-deploy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Configure AWS credentials (Access Keys)
-        if: ${{ steps.resolve-role.outputs.role_to_assume == '' }}
-        run: |
-          echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=${AWS_REGION}" >> $GITHUB_ENV
+        if: ${{ steps.aws-auth.outputs.using_oidc != 'true' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Validate AWS credentials
-        run: |
-          echo "Validating AWS credentials..."
-          aws sts get-caller-identity
-          echo "✓ AWS credentials validated"
+        run: aws sts get-caller-identity
 
-      - name: Check CloudFormation deployment permissions
+      - name: Validate CloudFormation template
         run: |
           echo "Checking CloudFormation deployment permissions..."
           echo "AWS_ROLE_ARN=${AWS_ROLE_ARN}"
@@ -124,15 +98,8 @@ jobs:
 
           if aws cloudformation validate-template \
             --template-body file://infra/cloudformation/orchestration.yaml \
-            --region "${AWS_REGION}" >/dev/null; then
-            echo "✓ CloudFormation validate-template works"
-          else
-            echo "✗ CloudFormation validate-template failed"
-            echo "Ensure the AWS principal has cloudformation:ValidateTemplate and cloudformation:CreateStack/UpdateStack permissions."
-            echo "If using access keys, attach the policy in infra/iam/cloudformation_deployment_policy.json to the deploying IAM user."
-            echo "If using role-based deployment, set the AWS_ROLE_ARN secret to a role with these permissions."
-            exit 1
-          fi
+            --region "${AWS_REGION}" >/dev/null
+          echo "✓ CloudFormation template validated"
 
       - name: Build Lambda packages
         run: |
@@ -150,22 +117,11 @@ jobs:
           aws cloudformation deploy \
             --template-file infra/cloudformation/orchestration.yaml \
             --stack-name "$STACK_NAME" \
-            --parameter-overrides \
-              Environment=$ENVIRONMENT \
-              NotificationEmail=$NOTIFICATION_EMAIL \
+            --parameter-overrides Environment="${ENVIRONMENT}" NotificationEmail="${NOTIFICATION_EMAIL}" \
             --capabilities CAPABILITY_NAMED_IAM \
             --region "$AWS_REGION" \
             --no-fail-on-empty-changeset
           echo "✓ CloudFormation stack deployed"
-
-      - name: Get CloudFormation stack outputs
-        run: |
-          echo "=== Stack Outputs ==="
-          aws cloudformation describe-stacks \
-            --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" \
-            --query 'Stacks[0].Outputs' \
-            --output table || echo "No outputs found"
 
       - name: Deploy ingestion Lambda
         run: |
@@ -178,9 +134,8 @@ jobs:
               --zip-file fileb://ingest_api_data.zip \
               --region "$AWS_REGION"
           else
-            echo "Lambda function $FUNCTION_NAME not found in stack, will be created by CloudFormation"
+            echo "Lambda function will be created by CloudFormation"
           fi
-          echo "✓ Ingestion Lambda ready"
 
       - name: Deploy notifier Lambda
         run: |
@@ -193,39 +148,28 @@ jobs:
               --zip-file fileb://notify_pipeline_status.zip \
               --region "$AWS_REGION"
           else
-            echo "Lambda function $FUNCTION_NAME not found in stack, will be created by CloudFormation"
+            echo "Lambda function will be created by CloudFormation"
           fi
-          echo "✓ Notifier Lambda ready"
 
       - name: Verify deployment
         run: |
-          echo "=== Verifying Deployment ==="
-          echo "Checking CloudFormation stack status..."
           aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" \
             --region "$AWS_REGION" \
             --query 'Stacks[0].StackStatus' \
             --output text
-          echo "✓ Deployment verified"
 
       - name: Deployment summary
         if: success()
         run: |
           echo "✓ DEPLOYMENT SUCCESSFUL"
-          echo ""
           echo "Stack Name: $STACK_NAME"
           echo "Region: $AWS_REGION"
           echo "Environment: $ENVIRONMENT"
-          echo ""
-          echo "Next steps:"
-          echo "1. Check AWS CloudFormation console for stack details"
-          echo "2. Review S3 buckets created: data-pipeline-country-population*"
-          echo "3. Check Lambda functions for execution logs"
-          echo "4. Verify EventBridge rule is enabled"
 
       - name: Deployment failed
         if: failure()
         run: |
           echo "✗ DEPLOYMENT FAILED"
-          echo "Check CloudFormation stack events for details"
+          echo "Check CloudFormation stack events"
           exit 1
