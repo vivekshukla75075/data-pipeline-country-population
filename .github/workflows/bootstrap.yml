@@ -1,0 +1,45 @@
+name: 1. Bootstrap OIDC Role
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: us-east-1
+      STACK_NAME: github-oidc-bootstrap
+
+      # TEMPORARY: Use access keys ONLY for bootstrap
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate AWS credentials
+        run: aws sts get-caller-identity
+
+      - name: Deploy bootstrap stack
+        run: |
+          echo "Deploying OIDC bootstrap stack..."
+
+          aws cloudformation deploy \
+            --template-file infra/bootstrap/github-oidc-role.yaml \
+            --stack-name $STACK_NAME \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region $AWS_REGION
+
+          echo "Bootstrap complete"
+
+      - name: Output Role ARN
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name $STACK_NAME \
+            --region $AWS_REGION \
+            --query "Stacks[0].Outputs"
