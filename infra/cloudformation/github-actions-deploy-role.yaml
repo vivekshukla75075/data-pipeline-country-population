@@ -101,6 +101,9 @@ Resources:
                   - lambda:AddPermission
                   - lambda:RemovePermission
                   - lambda:ListFunctions
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:GetFunctionConfiguration
                 Resource: "*"
 
               - Effect: Allow
