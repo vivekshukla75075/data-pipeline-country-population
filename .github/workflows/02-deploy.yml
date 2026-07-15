@@ -222,6 +222,7 @@ jobs:
                 --function-name "$FUNCTION_NAME" \
                 --zip-file "fileb://${ZIP_FILE}" \
                 --region "$AWS_REGION" >/dev/null
+              wait_for_lambda_ready "$FUNCTION_NAME"
               aws lambda update-function-configuration \
                 --function-name "$FUNCTION_NAME" \
                 --role "$ROLE_ARN" \
