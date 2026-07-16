@@ -68,6 +68,16 @@ def lambda_handler(event, context):
 				headers = {'Content-Encoding': response.getheader('Content-Encoding')}
 				response_data = decode_response_body(raw, headers)
 				data = json.loads(response_data)
+				# Normalize API response: expected a list of country objects.
+				# Some API versions return an envelope like {"success":false,"data":...,"errors":...}
+				if isinstance(data, dict):
+					# If the API returned an envelope with a 'data' list, extract it
+					if 'data' in data and isinstance(data['data'], list):
+						data = data['data']
+					else:
+						# Treat any non-list response as an error so fallback is used
+						api_error = f"API returned unexpected payload: keys={list(data.keys())}"
+						data = None
 			
 			log_messages.append(f"✓ API call successful - HTTP 200 OK")
 			log_messages.append(f"✓ Fetched {len(data)} records from API")
