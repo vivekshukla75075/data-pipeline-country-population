@@ -177,12 +177,13 @@ jobs:
           aws s3 cp Transformation/transform_data.py s3://$DATA_BUCKET_NAME/scripts/
 
           echo "Bootstrapping folder prefixes for pipeline zones"
-          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key raw/countries/.keep --body /dev/null || true
-          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key validated/countries/.keep --body /dev/null || true
-          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key intermediate/countries/.keep --body /dev/null || true
-          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key curated/countries/.keep --body /dev/null || true
-          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key archive/countries/.keep --body /dev/null || true
-          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key scripts/.keep --body /dev/null || true
+          touch /tmp/.keep
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key raw/countries/.keep --body /tmp/.keep
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key validated/countries/.keep --body /tmp/.keep
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key intermediate/countries/.keep --body /tmp/.keep
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key curated/countries/.keep --body /tmp/.keep
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key archive/countries/.keep --body /tmp/.keep
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key scripts/.keep --body /tmp/.keep
 
           create_or_update_glue_job() {
             local JOB_NAME="$1"
