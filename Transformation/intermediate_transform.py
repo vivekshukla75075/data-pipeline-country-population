@@ -8,6 +8,7 @@ from datetime import datetime
 
 import boto3
 from pyspark.sql import functions as F
+from pyspark.sql.types import StructType
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -58,8 +59,15 @@ def run_intermediate_transform(bucket_name, validated_zone, intermediate_zone, s
     logger.info('Found %s validated parquet file(s) to read.', len(parquet_files))
     validated_df = spark.read.parquet(*parquet_files)
 
+    if 'country_name' in validated_df.columns:
+        country_name_col = F.col('country_name')
+    elif 'name' in validated_df.columns and isinstance(validated_df.schema['name'].dataType, StructType):
+        country_name_col = F.col('name.common')
+    else:
+        country_name_col = F.col('name')
+
     intermediate_df = validated_df.select(
-        F.col('name.common').alias('country_name'),
+        country_name_col.alias('country_name'),
         F.col('region'),
         F.col('subregion'),
         F.col('population').cast('long').alias('population'),

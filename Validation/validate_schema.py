@@ -8,6 +8,7 @@ from datetime import datetime
 
 import boto3
 from pyspark.sql import functions as F
+from pyspark.sql.types import StructType
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -63,17 +64,22 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, spark=No
     if '_corrupt_record' in raw_df.columns:
         logger.warning('Corrupt records found; the job will continue with the cleaned dataset.')
 
-    # Extract the common name from the nested name object
+    # Extract the common name from the nested name object, or preserve name when already a string.
     if 'name' in raw_df.columns:
-        raw_df = raw_df.withColumn('name', F.col('name.common'))
+        name_type = raw_df.schema['name'].dataType
+        if isinstance(name_type, StructType):
+            raw_df = raw_df.withColumn('country_name', F.col('name.common'))
+        else:
+            raw_df = raw_df.withColumn('country_name', F.col('name'))
+        raw_df = raw_df.drop('name')
 
-    required_columns = ['name', 'population', 'region']
+    required_columns = ['country_name', 'population', 'region']
     missing_columns = [column for column in required_columns if column not in raw_df.columns]
     if missing_columns:
         raise ValueError(f'Missing required columns: {missing_columns}')
 
     validated_df = raw_df.filter(
-        F.col('population').isNotNull() & (F.col('population') > 0) & F.col('region').isNotNull() & F.col('name').isNotNull()
+        F.col('population').isNotNull() & (F.col('population') > 0) & F.col('region').isNotNull() & F.col('country_name').isNotNull()
     )
 
     record_count_raw = raw_df.count()
