@@ -231,7 +231,8 @@ jobs:
 
           # Prefer the Lambda-configured key when available; otherwise fall back to a workflow configured value.
           INGESTION_KMS_ARN=$(aws lambda get-function-configuration --function-name "$IngestionLambdaName" --region "$AWS_REGION" --query 'KMSKeyArn' --output text 2>/dev/null || true)
-          if [ -z "$INGESTION_KMS_ARN" ]; then
+          INGESTION_KMS_ARN=${INGESTION_KMS_ARN//[$'\r\n']/}
+          if [ -z "$INGESTION_KMS_ARN" ] || [ "$INGESTION_KMS_ARN" = "None" ]; then
             INGESTION_KMS_ARN="${LAMBDA_KMS_KEY_ARN:-arn:aws:kms:us-east-1:778277577996:key/be41d7eb-e179-4416-af91-8985db05d80}"
           fi
 
