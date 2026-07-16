@@ -265,8 +265,14 @@ jobs:
           else
             echo "No usable KMS key found for ingestion Lambda; switching to the default Lambda-managed KMS key"
             ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-            DEFAULT_LAMBDA_KEY_ARN="arn:aws:kms:${AWS_REGION}:${ACCOUNT_ID}:alias/aws/lambda"
-            aws lambda update-function-configuration --function-name "$IngestionLambdaName" --kms-key-arn "$DEFAULT_LAMBDA_KEY_ARN" --region "$AWS_REGION" || true
+            DEFAULT_LAMBDA_KEY_ID=$(aws kms list-aliases --alias-name alias/aws/lambda --region "$AWS_REGION" --query 'Aliases[0].TargetKeyId' --output text 2>/dev/null || echo "")
+            if [ -n "$DEFAULT_LAMBDA_KEY_ID" ] && [ "$DEFAULT_LAMBDA_KEY_ID" != "None" ]; then
+              DEFAULT_LAMBDA_KEY_ARN="arn:aws:kms:${AWS_REGION}:${ACCOUNT_ID}:key/${DEFAULT_LAMBDA_KEY_ID}"
+              echo "Updating Lambda to use default KMS key ARN: $DEFAULT_LAMBDA_KEY_ARN"
+              aws lambda update-function-configuration --function-name "$IngestionLambdaName" --kms-key-arn "$DEFAULT_LAMBDA_KEY_ARN" --region "$AWS_REGION" || true
+            else
+              echo "Could not resolve default Lambda-managed KMS key ARN; leaving current configuration unchanged"
+            fi
           fi
 
       - name: Deploy Lambda functions and invoke permissions
