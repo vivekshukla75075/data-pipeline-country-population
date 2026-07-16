@@ -35,6 +35,14 @@ Parameters:
     Type: String
     Default: country-population-orchestration
     Description: Name of the Step Functions state machine
+  CreatePipelineKmsKey:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Whether to create a customer-managed KMS key for Lambda environment encryption
+
+Conditions:
+  CreatePipelineKmsKeyCondition: !Equals [!Ref CreatePipelineKmsKey, 'true']
 
 Resources:
   PipelineNotificationQueue:
@@ -469,6 +477,7 @@ Resources:
           Value: !Ref Environment
 
   PipelineKmsKey:
+    Condition: CreatePipelineKmsKeyCondition
     Type: AWS::KMS::Key
     Properties:
       Description: KMS key for encrypting Lambda environment variables for the pipeline
@@ -496,6 +505,7 @@ Resources:
       # Tags removed to avoid requiring the deploy principal to have kms:TagResource
 
   PipelineKmsAlias:
+    Condition: CreatePipelineKmsKeyCondition
     Type: AWS::KMS::Alias
     Properties:
       AliasName: !Sub 'alias/data-pipeline-${Environment}'
@@ -552,5 +562,6 @@ Outputs:
     Description: ARN of the validation trigger SQS queue
     Value: !GetAtt ValidationTriggerQueue.Arn
   PipelineKmsKeyArn:
+    Condition: CreatePipelineKmsKeyCondition
     Description: ARN of the pipeline customer-managed KMS key (if created)
     Value: !GetAtt PipelineKmsKey.Arn
