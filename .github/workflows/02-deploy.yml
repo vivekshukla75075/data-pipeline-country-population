@@ -355,6 +355,23 @@ jobs:
             done
           }
 
+          set_lambda_kms_key() {
+            local FUNCTION_NAME="$1"
+            local KMS_KEY_ARN="$2"
+
+            if [ -n "$KMS_KEY_ARN" ] && [ "$KMS_KEY_ARN" != "None" ]; then
+              aws lambda update-function-configuration \
+                --function-name "$FUNCTION_NAME" \
+                --kms-key-arn "$KMS_KEY_ARN" \
+                --region "$AWS_REGION" >/dev/null 2>&1 || true
+            else
+              aws lambda update-function-configuration \
+                --function-name "$FUNCTION_NAME" \
+                --kms-key-arn "" \
+                --region "$AWS_REGION" >/dev/null 2>&1 || true
+            fi
+          }
+
           deploy_lambda() {
             local FUNCTION_NAME="$1"
             local HANDLER="$2"
@@ -395,6 +412,7 @@ jobs:
             fi
 
             wait_for_lambda_ready "$FUNCTION_NAME"
+            set_lambda_kms_key "$FUNCTION_NAME" "$PIPELINE_KMS_ARN"
             aws lambda add-permission \
               --function-name "$FUNCTION_NAME" \
               --statement-id "AllowStateMachineInvoke" \
