@@ -194,21 +194,8 @@ jobs:
 
             if aws glue get-job --job-name "$JOB_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
               echo "Updating Glue job: $JOB_NAME"
-              cat > /tmp/glue-job-update.json <<EOF
-              {
-                "Role": "$GLUE_ROLE_ARN",
-                "Command": {
-                  "Name": "glueetl",
-                  "ScriptLocation": "$SCRIPT_LOCATION"
-                },
-                "DefaultArguments": $DEFAULT_ARGUMENTS,
-                "GlueVersion": "3.0",
-                "WorkerType": "$WORKER_TYPE",
-                "NumberOfWorkers": $NUM_WORKERS,
-                "Timeout": 60
-              }
-              EOF
-              aws glue update-job --job-name "$JOB_NAME" --job-update file:///tmp/glue-job-update.json --region "$AWS_REGION"
+              JOB_UPDATE_JSON="{\"Role\":\"$GLUE_ROLE_ARN\",\"Command\":{\"Name\":\"glueetl\",\"ScriptLocation\":\"$SCRIPT_LOCATION\"},\"DefaultArguments\":$DEFAULT_ARGUMENTS,\"GlueVersion\":\"3.0\",\"WorkerType\":\"$WORKER_TYPE\",\"NumberOfWorkers\":$NUM_WORKERS,\"Timeout\":60}"
+              aws glue update-job --job-name "$JOB_NAME" --job-update "$JOB_UPDATE_JSON" --region "$AWS_REGION"
             else
               echo "Creating Glue job: $JOB_NAME"
               aws glue create-job \
