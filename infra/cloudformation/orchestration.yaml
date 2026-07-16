@@ -468,6 +468,43 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  PipelineKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for encrypting Lambda environment variables for the pipeline
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowAccountRootFullAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowLambdaRolesDecrypt
+            Effect: Allow
+            Principal:
+              AWS:
+                - !GetAtt IngestionLambdaRole.Arn
+                - !GetAtt PipelineNotificationLambdaRole.Arn
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+            Resource: '*'
+      PendingWindowInDays: 7
+      Tags:
+        - Key: Project
+          Value: data-pipeline-country-population
+        - Key: Environment
+          Value: !Ref Environment
+
+  PipelineKmsAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/data-pipeline-${Environment}'
+      TargetKeyId: !Ref PipelineKmsKey
+
   PipelineStateMachineLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -518,3 +555,6 @@ Outputs:
   ValidationTriggerQueueArn:
     Description: ARN of the validation trigger SQS queue
     Value: !GetAtt ValidationTriggerQueue.Arn
+  PipelineKmsKeyArn:
+    Description: ARN of the pipeline customer-managed KMS key (if created)
+    Value: !GetAtt PipelineKmsKey.Arn

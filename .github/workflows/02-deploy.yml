@@ -151,6 +151,33 @@ jobs:
             --no-fail-on-empty-changeset
           echo "✓ CloudFormation stack deployed"
 
+          # If the stack created a customer-managed KMS key, set the existing Lambdas to use it
+          PIPELINE_KMS_ARN=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`PipelineKmsKeyArn`].OutputValue | [0]' \
+            --output text 2>/dev/null || true)
+
+          if [ -n "$PIPELINE_KMS_ARN" ] && [ "$PIPELINE_KMS_ARN" != "None" ]; then
+            echo "Updating existing Lambdas to use pipeline KMS key: $PIPELINE_KMS_ARN"
+            IngestionLambdaName=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Parameters[?ParameterKey==`IngestionLambdaName`].ParameterValue | [0]' --output text 2>/dev/null || echo "")
+            if [ -z "$IngestionLambdaName" ] || [ "$IngestionLambdaName" = "None" ]; then
+              IngestionLambdaName="ingest-api-data"
+            fi
+
+            echo "Setting KmsKeyArn for $IngestionLambdaName"
+            aws lambda update-function-configuration --function-name "$IngestionLambdaName" --kms-key-arn "$PIPELINE_KMS_ARN" --region "$AWS_REGION" || true
+
+            NotificationLambdaName=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Parameters[?ParameterKey==`NotificationLambdaName`].ParameterValue | [0]' --output text 2>/dev/null || echo "")
+            if [ -z "$NotificationLambdaName" ] || [ "$NotificationLambdaName" = "None" ]; then
+              NotificationLambdaName="pipeline-status-notifier"
+            fi
+            echo "Setting KmsKeyArn for $NotificationLambdaName"
+            aws lambda update-function-configuration --function-name "$NotificationLambdaName" --kms-key-arn "$PIPELINE_KMS_ARN" --region "$AWS_REGION" || true
+          else
+            echo "No pipeline-managed KMS key found in stack outputs; skipping Lambda KMS assignment"
+          fi
+
       - name: Upload Glue scripts and bootstrap S3 folders
         run: |
           set -euo pipefail
