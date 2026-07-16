@@ -43,7 +43,7 @@ def main():
             existing_stmt['Principal'] = stmt['Principal']
             existing_stmt['Action'] = stmt['Action']
             existing_stmt['Resource'] = stmt['Resource']
-            print(f'Updated existing statement principal from {old_principal} to {stmt['Principal']["AWS"]}')
+            print(f"Updated existing statement principal from {old_principal} to {stmt['Principal']['AWS']}")
         with open(dst, 'w') as f:
             json.dump(policy, f, indent=2)
     else:
