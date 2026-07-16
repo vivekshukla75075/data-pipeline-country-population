@@ -151,6 +151,17 @@ jobs:
             --no-fail-on-empty-changeset
           echo "✓ CloudFormation stack deployed"
 
+          # Fetch Lambda names
+          IngestionLambdaName=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Parameters[?ParameterKey==`IngestionLambdaName`].ParameterValue | [0]' --output text 2>/dev/null || echo "")
+          if [ -z "$IngestionLambdaName" ] || [ "$IngestionLambdaName" = "None" ]; then
+            IngestionLambdaName="ingest-api-data"
+          fi
+
+          NotificationLambdaName=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Parameters[?ParameterKey==`NotificationLambdaName`].ParameterValue | [0]' --output text 2>/dev/null || echo "")
+          if [ -z "$NotificationLambdaName" ] || [ "$NotificationLambdaName" = "None" ]; then
+            NotificationLambdaName="pipeline-status-notifier"
+          fi
+
           # If the stack created a customer-managed KMS key, set the existing Lambdas to use it
           PIPELINE_KMS_ARN=$(aws cloudformation describe-stacks \
             --stack-name "$STACK_NAME" \
@@ -160,22 +171,16 @@ jobs:
 
           if [ -n "$PIPELINE_KMS_ARN" ] && [ "$PIPELINE_KMS_ARN" != "None" ]; then
             echo "Updating existing Lambdas to use pipeline KMS key: $PIPELINE_KMS_ARN"
-            IngestionLambdaName=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Parameters[?ParameterKey==`IngestionLambdaName`].ParameterValue | [0]' --output text 2>/dev/null || echo "")
-            if [ -z "$IngestionLambdaName" ] || [ "$IngestionLambdaName" = "None" ]; then
-              IngestionLambdaName="ingest-api-data"
-            fi
-
-            echo "Setting KmsKeyArn for $IngestionLambdaName"
+            echo "Setting KmsKeyArn for $IngestionLambdaName to $PIPELINE_KMS_ARN"
             aws lambda update-function-configuration --function-name "$IngestionLambdaName" --kms-key-arn "$PIPELINE_KMS_ARN" --region "$AWS_REGION" || true
-
-            NotificationLambdaName=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Parameters[?ParameterKey==`NotificationLambdaName`].ParameterValue | [0]' --output text 2>/dev/null || echo "")
-            if [ -z "$NotificationLambdaName" ] || [ "$NotificationLambdaName" = "None" ]; then
-              NotificationLambdaName="pipeline-status-notifier"
-            fi
-            echo "Setting KmsKeyArn for $NotificationLambdaName"
+            echo "Setting KmsKeyArn for $NotificationLambdaName to $PIPELINE_KMS_ARN"
             aws lambda update-function-configuration --function-name "$NotificationLambdaName" --kms-key-arn "$PIPELINE_KMS_ARN" --region "$AWS_REGION" || true
           else
-            echo "No pipeline-managed KMS key found in stack outputs; skipping Lambda KMS assignment"
+            echo "No pipeline-managed KMS key in stack outputs; clearing Lambda KMS associations to use default encryption"
+            echo "Clearing KmsKeyArn for $IngestionLambdaName"
+            aws lambda update-function-configuration --function-name "$IngestionLambdaName" --kms-key-arn "" --region "$AWS_REGION" 2>&1 | grep -q "InvalidParameterValueException" && echo "(Ignoring: Lambda may already have no KMS key set)" || true
+            echo "Clearing KmsKeyArn for $NotificationLambdaName"
+            aws lambda update-function-configuration --function-name "$NotificationLambdaName" --kms-key-arn "" --region "$AWS_REGION" 2>&1 | grep -q "InvalidParameterValueException" && echo "(Ignoring: Lambda may already have no KMS key set)" || true
           fi
 
       - name: Upload Glue scripts and bootstrap S3 folders
