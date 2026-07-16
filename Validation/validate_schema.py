@@ -1,4 +1,4 @@
-﻿"""Validation: validate raw country JSON and write a validated parquet dataset."""
+"""Validation: validate raw country JSON and write a validated parquet dataset."""
 
 import logging
 import os
