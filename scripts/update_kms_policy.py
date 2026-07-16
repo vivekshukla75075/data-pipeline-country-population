@@ -35,14 +35,21 @@ def main():
         existing = [s for s in policy.get('Statement', []) if s.get('Sid') == sid]
         if not existing:
             policy.setdefault('Statement', []).append(stmt)
-            json.dump(policy, open(dst, 'w'), indent=2)
             print('Appended new statement to policy')
         else:
-            print('Statement already exists; writing existing policy to', dst)
-            json.dump(policy, open(dst, 'w'), indent=2)
+            existing_stmt = existing[0]
+            old_principal = existing_stmt.get('Principal', {}).get('AWS')
+            existing_stmt['Effect'] = 'Allow'
+            existing_stmt['Principal'] = stmt['Principal']
+            existing_stmt['Action'] = stmt['Action']
+            existing_stmt['Resource'] = stmt['Resource']
+            print(f'Updated existing statement principal from {old_principal} to {stmt['Principal']["AWS"]}')
+        with open(dst, 'w') as f:
+            json.dump(policy, f, indent=2)
     else:
         print('No principals found in environment; writing original policy to', dst)
-        json.dump(policy, open(dst, 'w'), indent=2)
+        with open(dst, 'w') as f:
+            json.dump(policy, f, indent=2)
 
 if __name__ == '__main__':
     main()

@@ -237,9 +237,11 @@ jobs:
             NOTIFIER_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`NotificationLambdaRoleArn`].OutputValue | [0]' --output text)
 
             echo "Modifying key policy for $KEY_ID to allow roles: $INGESTION_ROLE_ARN $NOTIFIER_ROLE_ARN"
+            export INGESTION_ROLE_ARN="$INGESTION_ROLE_ARN"
+            export NOTIFIER_ROLE_ARN="$NOTIFIER_ROLE_ARN"
             aws kms get-key-policy --key-id "$KEY_ID" --policy-name default --query Policy --output text > /tmp/key_policy.json
             python3 scripts/update_kms_policy.py
-            aws kms put-key-policy --key-id "$KEY_ID" --policy-name default --policy file:///tmp/key_policy_new.json || true
+            aws kms put-key-policy --key-id "$KEY_ID" --policy-name default --policy file:///tmp/key_policy_new.json
           else
             echo "No KMS key configured for ingestion Lambda; skipping KMS policy update"
           fi
