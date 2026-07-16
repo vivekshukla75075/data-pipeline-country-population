@@ -361,6 +361,25 @@ jobs:
             done
           }
 
+          wait_for_lambda_deleted() {
+            local FUNCTION_NAME="$1"
+            local attempt=0
+            while true; do
+              if ! aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+                break
+              fi
+
+              attempt=$((attempt + 1))
+              if [ "$attempt" -ge 30 ]; then
+                echo "ERROR: Lambda function $FUNCTION_NAME is not deleted after 150 seconds"
+                exit 1
+              fi
+
+              echo "Waiting for Lambda $FUNCTION_NAME to be deleted..."
+              sleep 5
+            done
+          }
+
           set_lambda_kms_key() {
             local FUNCTION_NAME="$1"
             local KMS_KEY_ARN="$2"
@@ -387,22 +406,41 @@ jobs:
             local ENV_VARS="$5"
 
             if aws lambda get-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-              echo "Updating existing Lambda function: $FUNCTION_NAME"
-              wait_for_lambda_ready "$FUNCTION_NAME"
-              aws lambda update-function-code \
-                --function-name "$FUNCTION_NAME" \
-                --zip-file "fileb://${ZIP_FILE}" \
-                --region "$AWS_REGION" >/dev/null
-              wait_for_lambda_ready "$FUNCTION_NAME"
-              aws lambda update-function-configuration \
-                --function-name "$FUNCTION_NAME" \
-                --role "$ROLE_ARN" \
-                --handler "$HANDLER" \
-                --runtime python3.11 \
-                --timeout 60 \
-                --memory-size 128 \
-                --environment "$ENV_VARS" \
-                --region "$AWS_REGION" >/dev/null
+              if [ -z "$PIPELINE_KMS_ARN" ] || [ "$PIPELINE_KMS_ARN" = "None" ]; then
+                echo "Recreating Lambda function $FUNCTION_NAME to remove any previous KMS association"
+                aws lambda delete-function --function-name "$FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1 || true
+                wait_for_lambda_deleted "$FUNCTION_NAME"
+                echo "Creating Lambda function: $FUNCTION_NAME"
+                aws lambda create-function \
+                  --function-name "$FUNCTION_NAME" \
+                  --runtime python3.11 \
+                  --role "$ROLE_ARN" \
+                  --handler "$HANDLER" \
+                  --zip-file "fileb://${ZIP_FILE}" \
+                  --timeout 60 \
+                  --memory-size 128 \
+                  --environment "$ENV_VARS" \
+                  --region "$AWS_REGION" >/dev/null
+              else
+                echo "Updating existing Lambda function: $FUNCTION_NAME"
+                wait_for_lambda_ready "$FUNCTION_NAME"
+                aws lambda update-function-code \
+                  --function-name "$FUNCTION_NAME" \
+                  --zip-file "fileb://${ZIP_FILE}" \
+                  --region "$AWS_REGION" >/dev/null
+                wait_for_lambda_ready "$FUNCTION_NAME"
+                aws lambda update-function-configuration \
+                  --function-name "$FUNCTION_NAME" \
+                  --role "$ROLE_ARN" \
+                  --handler "$HANDLER" \
+                  --runtime python3.11 \
+                  --timeout 60 \
+                  --memory-size 128 \
+                  --environment "$ENV_VARS" \
+                  --region "$AWS_REGION" >/dev/null
+                wait_for_lambda_ready "$FUNCTION_NAME"
+                set_lambda_kms_key "$FUNCTION_NAME" "$PIPELINE_KMS_ARN"
+              fi
             else
               echo "Creating Lambda function: $FUNCTION_NAME"
               aws lambda create-function \
@@ -418,7 +456,6 @@ jobs:
             fi
 
             wait_for_lambda_ready "$FUNCTION_NAME"
-            set_lambda_kms_key "$FUNCTION_NAME" "$PIPELINE_KMS_ARN"
             aws lambda add-permission \
               --function-name "$FUNCTION_NAME" \
               --statement-id "AllowStateMachineInvoke" \
