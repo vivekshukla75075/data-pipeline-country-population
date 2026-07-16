@@ -324,6 +324,12 @@ jobs:
             --region "$AWS_REGION" \
             --query 'Stacks[0].Outputs[?OutputKey==`NotificationTopicArn`].OutputValue | [0]' \
             --output text)
+          PIPELINE_KMS_ARN=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`PipelineKmsKeyArn`].OutputValue | [0]' \
+            --output text 2>/dev/null || true)
+          PIPELINE_KMS_ARN=${PIPELINE_KMS_ARN//[$'\r\n']/}
 
           wait_for_lambda_ready() {
             local FUNCTION_NAME="$1"
