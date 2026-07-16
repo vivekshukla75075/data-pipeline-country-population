@@ -99,7 +99,6 @@ jobs:
         if: ${{ env.EMPTY_BUCKETS == 'true' }}
         run: |
           echo "Finding S3 buckets created by the stack via CloudFormation..."
-          # Query stack resources for S3 buckets to avoid calling ListBuckets (requires ListAllMyBuckets)
           BUCKETS=$(aws cloudformation list-stack-resources \
             --stack-name "$STACK_NAME" \
             --region "$AWS_REGION" \
@@ -112,46 +111,10 @@ jobs:
             echo "Found buckets:"
             echo "$BUCKETS"
             echo ""
-            echo "Emptying buckets..."
+            echo "Emptying buckets with Python cleanup script..."
             for bucket in $BUCKETS; do
               echo "Processing bucket: $bucket"
-
-              # Remove all object versions (handles versioned buckets)
-              aws s3api list-object-versions \
-                --bucket "$bucket" \
-                --query 'Versions[].[Key,VersionId]' \
-                --output text | while read key version; do
-                  if [ -n "$key" ]; then
-                    echo "  Deleting: $key (version: $version)"
-                    aws s3api delete-object \
-                      --bucket "$bucket" \
-                      --key "$key" \
-                      --version-id "$version" >/dev/null || true
-                  fi
-                done
-
-              # Remove delete markers if any
-              aws s3api list-object-versions \
-                --bucket "$bucket" \
-                --query 'DeleteMarkers[].[Key,VersionId]' \
-                --output text | while read key version; do
-                  if [ -n "$key" ]; then
-                    echo "  Deleting marker: $key (version: $version)"
-                    aws s3api delete-object \
-                      --bucket "$bucket" \
-                      --key "$key" \
-                      --version-id "$version" >/dev/null || true
-                  fi
-                done
-
-              # Also delete non-versioned objects
-              aws s3api list-objects-v2 --bucket "$bucket" --query 'Contents[].[Key]' --output text | while read key; do
-                if [ -n "$key" ]; then
-                  echo "  Deleting object: $key"
-                  aws s3api delete-object --bucket "$bucket" --key "$key" >/dev/null || true
-                fi
-              done
-
+              python scripts/empty_s3_bucket.py "$bucket"
               echo "✓ Bucket emptied: $bucket"
             done
           fi
