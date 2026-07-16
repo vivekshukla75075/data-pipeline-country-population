@@ -233,37 +233,7 @@ jobs:
 
             echo "Modifying key policy for $KEY_ID to allow roles: $INGESTION_ROLE_ARN $NOTIFIER_ROLE_ARN"
             aws kms get-key-policy --key-id "$KEY_ID" --policy-name default --query Policy --output text > /tmp/key_policy.json
-
-            python3 - <<PY
-import json
-policy=json.load(open('/tmp/key_policy.json'))
-stm={
-  "Sid": "AllowLambdaRolesDecrypt",
-  "Effect": "Allow",
-  "Principal": {"AWS": []},
-  "Action": ["kms:Decrypt","kms:GenerateDataKey*","kms:DescribeKey"],
-  "Resource": "*"
-}
-import os
-ing=os.environ.get('INGESTION_ROLE_ARN')
-notr=os.environ.get('NOTIFIER_ROLE_ARN')
-principals=[]
-if ing and ing != 'None': principals.append(ing)
-if notr and notr != 'None': principals.append(notr)
-if principals:
-    stm['Principal']['AWS']=principals if len(principals)>1 else principals[0]
-    # Append if not duplicate
-    existing=[s for s in policy.get('Statement',[]) if s.get('Sid')=='AllowLambdaRolesDecrypt']
-    if not existing:
-        policy.setdefault('Statement',[]).append(stm)
-        json.dump(policy, open('/tmp/key_policy_new.json','w'), indent=2)
-    else:
-        json.dump(policy, open('/tmp/key_policy_new.json','w'), indent=2)
-else:
-    # nothing to do
-    json.dump(policy, open('/tmp/key_policy_new.json','w'), indent=2)
-PY
-
+            python3 scripts/update_kms_policy.py
             aws kms put-key-policy --key-id "$KEY_ID" --policy-name default --policy file:///tmp/key_policy_new.json || true
           else
             echo "No KMS key configured for ingestion Lambda; skipping KMS policy update"
