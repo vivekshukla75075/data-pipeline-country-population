@@ -12,6 +12,26 @@ from pyspark.sql import functions as F
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def delete_s3_prefix_objects(bucket_name, prefix, preserve_keep=True):
+    """Delete existing objects under an S3 prefix, optionally preserving .keep files."""
+    prefix = prefix.rstrip('/') + '/'
+    s3_client = boto3.client('s3')
+    paginator = s3_client.get_paginator('list_objects_v2')
+    delete_batch = []
+
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        for obj in page.get('Contents', []):
+            key = obj['Key']
+            if preserve_keep and key.endswith('.keep'):
+                continue
+            delete_batch.append({'Key': key})
+            if len(delete_batch) == 1000:
+                s3_client.delete_objects(Bucket=bucket_name, Delete={'Objects': delete_batch})
+                delete_batch = []
+
+    if delete_batch:
+        s3_client.delete_objects(Bucket=bucket_name, Delete={'Objects': delete_batch})
+
 
 def get_runtime_args():
     """Read Glue job args when present, otherwise fall back to environment variables."""
@@ -60,6 +80,8 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, spark=No
     record_count_validated = validated_df.count()
     logger.info('Validated %s of %s records', record_count_validated, record_count_raw)
 
+    delete_s3_prefix_objects(bucket_name, validated_zone, preserve_keep=True)
+    logger.info('Writing validated parquet data to %s', validated_path)
     validated_df.write.mode('overwrite').format('parquet').option('compression', 'snappy').partitionBy('region').save(validated_path)
 
     s3_client = boto3.client('s3')

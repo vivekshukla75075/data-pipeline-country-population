@@ -12,6 +12,21 @@ from pyspark.sql import functions as F
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def list_parquet_files(bucket_name, prefix):
+    """List existing parquet files under an S3 prefix."""
+    s3_client = boto3.client('s3')
+    prefix = prefix.rstrip('/') + '/'
+    paginator = s3_client.get_paginator('list_objects_v2')
+    parquet_files = []
+
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        for obj in page.get('Contents', []):
+            key = obj['Key']
+            if key.endswith('.parquet'):
+                parquet_files.append(f's3://{bucket_name}/{key}')
+
+    return parquet_files
+
 
 def get_runtime_args():
     """Read Glue job args when present, otherwise fall back to environment variables."""
@@ -35,8 +50,13 @@ def run_transformation(bucket_name, intermediate_zone, curated_zone, spark=None)
         from pyspark.sql import SparkSession
         spark = SparkSession.builder.appName('CuratedTransformationJob').getOrCreate()
 
-    logger.info('Reading intermediate parquet data from %s', intermediate_path)
-    intermediate_df = spark.read.parquet(intermediate_path)
+    logger.info('Listing intermediate parquet files under %s', intermediate_path)
+    parquet_files = list_parquet_files(bucket_name, intermediate_zone)
+    if not parquet_files:
+        raise ValueError(f'No intermediate parquet files found under {intermediate_path}')
+
+    logger.info('Found %s intermediate parquet file(s) to read.', len(parquet_files))
+    intermediate_df = spark.read.parquet(*parquet_files)
     curated_df = intermediate_df.select(
         F.col('country_name'),
         F.col('region'),

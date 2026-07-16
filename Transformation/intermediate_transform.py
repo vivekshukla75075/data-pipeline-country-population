@@ -12,12 +12,27 @@ from pyspark.sql import functions as F
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def list_parquet_files(bucket_name, prefix):
+    """List existing parquet files under an S3 prefix."""
+    s3_client = boto3.client('s3')
+    prefix = prefix.rstrip('/') + '/'
+    paginator = s3_client.get_paginator('list_objects_v2')
+    parquet_files = []
+
+    for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+        for obj in page.get('Contents', []):
+            key = obj['Key']
+            if key.endswith('.parquet'):
+                parquet_files.append(f's3://{bucket_name}/{key}')
+
+    return parquet_files
+
 
 def get_runtime_args():
     """Read Glue job args when present, otherwise fall back to environment variables."""
     try:
         from awsglue.utils import getResolvedOptions
-        return getResolvedOptions(sys.argv, ['JOB_NAME', 'TempDir', 'bucket_name', 'raw_zone', 'validated_zone', 'intermediate_zone', 'archive_zone'])
+        return getResolvedOptions(sys.argv, ['JOB_NAME', 'TempDir', 'bucket_name', 'validated_zone', 'intermediate_zone'])
     except Exception:
         return {
             'bucket_name': os.environ.get('BUCKET_NAME', 'data-pipeline-country-population'),
@@ -35,8 +50,13 @@ def run_intermediate_transform(bucket_name, validated_zone, intermediate_zone, s
         from pyspark.sql import SparkSession
         spark = SparkSession.builder.appName('IntermediateTransformationJob').getOrCreate()
 
-    logger.info('Reading validated parquet data from %s', base_path)
-    validated_df = spark.read.parquet(base_path)
+    logger.info('Listing validated parquet files under %s', base_path)
+    parquet_files = list_parquet_files(bucket_name, validated_zone)
+    if not parquet_files:
+        raise ValueError(f'No validated parquet files found under {base_path}')
+
+    logger.info('Found %s validated parquet file(s) to read.', len(parquet_files))
+    validated_df = spark.read.parquet(*parquet_files)
 
     intermediate_df = validated_df.select(
         F.col('name.common').alias('country_name'),
