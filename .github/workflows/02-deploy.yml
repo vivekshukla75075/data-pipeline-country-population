@@ -151,6 +151,86 @@ jobs:
             --no-fail-on-empty-changeset
           echo "✓ CloudFormation stack deployed"
 
+      - name: Upload Glue scripts and bootstrap S3 folders
+        run: |
+          set -euo pipefail
+          echo "Loading S3 bucket and Glue role outputs"
+          DATA_BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`DataBucketName`].OutputValue | [0]' \
+            --output text)
+          GLUE_ROLE_ARN=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK_NAME" \
+            --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs[?OutputKey==`GlueJobRoleArn`].OutputValue | [0]' \
+            --output text)
+
+          if [ -z "$DATA_BUCKET_NAME" ] || [ -z "$GLUE_ROLE_ARN" ]; then
+            echo "ERROR: Missing CloudFormation outputs. DataBucketName=$DATA_BUCKET_NAME GlueJobRoleArn=$GLUE_ROLE_ARN"
+            exit 1
+          fi
+
+          echo "Uploading Glue scripts to s3://$DATA_BUCKET_NAME/scripts/"
+          aws s3 cp Validation/validate_schema.py s3://$DATA_BUCKET_NAME/scripts/
+          aws s3 cp Transformation/intermediate_transform.py s3://$DATA_BUCKET_NAME/scripts/
+          aws s3 cp Transformation/transform_data.py s3://$DATA_BUCKET_NAME/scripts/
+
+          echo "Bootstrapping folder prefixes for pipeline zones"
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key raw/countries/.keep --body /dev/null || true
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key validated/countries/.keep --body /dev/null || true
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key intermediate/countries/.keep --body /dev/null || true
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key curated/countries/.keep --body /dev/null || true
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key archive/countries/.keep --body /dev/null || true
+          aws s3api put-object --bucket "$DATA_BUCKET_NAME" --key scripts/.keep --body /dev/null || true
+
+          create_or_update_glue_job() {
+            local JOB_NAME="$1"
+            local SCRIPT_LOCATION="$2"
+            local WORKER_TYPE="$3"
+            local NUM_WORKERS="$4"
+            local DEFAULT_ARGUMENTS="$5"
+
+            if aws glue get-job --job-name "$JOB_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+              echo "Updating Glue job: $JOB_NAME"
+              cat > /tmp/glue-job-update.json <<EOF
+              {
+                "Role": "$GLUE_ROLE_ARN",
+                "Command": {
+                  "Name": "glueetl",
+                  "ScriptLocation": "$SCRIPT_LOCATION"
+                },
+                "DefaultArguments": $DEFAULT_ARGUMENTS,
+                "GlueVersion": "3.0",
+                "WorkerType": "$WORKER_TYPE",
+                "NumberOfWorkers": $NUM_WORKERS,
+                "Timeout": 60
+              }
+              EOF
+              aws glue update-job --job-name "$JOB_NAME" --job-update file:///tmp/glue-job-update.json --region "$AWS_REGION"
+            else
+              echo "Creating Glue job: $JOB_NAME"
+              aws glue create-job \
+                --name "$JOB_NAME" \
+                --role "$GLUE_ROLE_ARN" \
+                --command Name=glueetl,ScriptLocation="$SCRIPT_LOCATION" \
+                --glue-version 3.0 \
+                --worker-type "$WORKER_TYPE" \
+                --number-of-workers "$NUM_WORKERS" \
+                --timeout 60 \
+                --default-arguments "$DEFAULT_ARGUMENTS" \
+                --region "$AWS_REGION"
+            fi
+          }
+
+          VALIDATION_ARGS='{"--bucket_name":"'$DATA_BUCKET_NAME'","--raw_zone":"raw/countries","--validated_zone":"validated/countries","--archive_zone":"archive/countries"}'
+          INTERMEDIATE_ARGS='{"--bucket_name":"'$DATA_BUCKET_NAME'","--validated_zone":"validated/countries","--intermediate_zone":"intermediate/countries"}'
+          TRANSFORMATION_ARGS='{"--bucket_name":"'$DATA_BUCKET_NAME'","--intermediate_zone":"intermediate/countries","--curated_zone":"curated/countries"}'
+
+          create_or_update_glue_job "country-population-validation" "s3://$DATA_BUCKET_NAME/scripts/validate_schema.py" "G.1X" 3 "$VALIDATION_ARGS"
+          create_or_update_glue_job "country-population-intermediate" "s3://$DATA_BUCKET_NAME/scripts/intermediate_transform.py" "G.1X" 3 "$INTERMEDIATE_ARGS"
+          create_or_update_glue_job "country-population-transformation" "s3://$DATA_BUCKET_NAME/scripts/transform_data.py" "G.1X" 5 "$TRANSFORMATION_ARGS"
+
       - name: Deploy Lambda functions and invoke permissions
         run: |
           set -euo pipefail
