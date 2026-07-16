@@ -43,6 +43,10 @@ def run_validation(bucket_name, raw_zone, validated_zone, archive_zone, spark=No
     if '_corrupt_record' in raw_df.columns:
         logger.warning('Corrupt records found; the job will continue with the cleaned dataset.')
 
+    # Extract the common name from the nested name object
+    if 'name' in raw_df.columns:
+        raw_df = raw_df.withColumn('name', F.col('name.common'))
+
     required_columns = ['name', 'population', 'region']
     missing_columns = [column for column in required_columns if column not in raw_df.columns]
     if missing_columns:
