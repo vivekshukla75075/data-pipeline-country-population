@@ -220,6 +220,11 @@ jobs:
           create_or_update_glue_job "country-population-transformation" "s3://$DATA_BUCKET_NAME/scripts/transform_data.py" "G.1X" 5 "$TRANSFORMATION_ARGS"
 
           echo "Ensuring Lambda KMS key policy allows decrypt for Lambda roles"
+          # Determine ingestion lambda name (try stack parameter, fallback to default)
+          IngestionLambdaName=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Parameters[?ParameterKey==`IngestionLambdaName`].ParameterValue | [0]' --output text 2>/dev/null || echo "")
+          if [ -z "$IngestionLambdaName" ] || [ "$IngestionLambdaName" = "None" ]; then
+            IngestionLambdaName="ingest-api-data"
+          fi
           # Get ingestion Lambda's configured KMS key (if any)
           INGESTION_KMS_ARN=$(aws lambda get-function-configuration --function-name "$IngestionLambdaName" --region "$AWS_REGION" --query 'KMSKeyArn' --output text 2>/dev/null || echo "None")
           if [ "$INGESTION_KMS_ARN" != "None" ] && [ -n "$INGESTION_KMS_ARN" ]; then
