@@ -493,11 +493,7 @@ Resources:
               - kms:DescribeKey
             Resource: '*'
       PendingWindowInDays: 7
-      Tags:
-        - Key: Project
-          Value: data-pipeline-country-population
-        - Key: Environment
-          Value: !Ref Environment
+      # Tags removed to avoid requiring the deploy principal to have kms:TagResource
 
   PipelineKmsAlias:
     Type: AWS::KMS::Alias
