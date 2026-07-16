@@ -57,7 +57,7 @@ def run_intermediate_transform(bucket_name, validated_zone, intermediate_zone, s
         raise ValueError(f'No validated parquet files found under {base_path}')
 
     logger.info('Found %s validated parquet file(s) to read.', len(parquet_files))
-    validated_df = spark.read.parquet(*parquet_files)
+    validated_df = spark.read.option('basePath', base_path).parquet(*parquet_files)
 
     if 'country_name' in validated_df.columns:
         country_name_col = F.col('country_name')

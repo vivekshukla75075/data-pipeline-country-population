@@ -56,7 +56,7 @@ def run_transformation(bucket_name, intermediate_zone, curated_zone, spark=None)
         raise ValueError(f'No intermediate parquet files found under {intermediate_path}')
 
     logger.info('Found %s intermediate parquet file(s) to read.', len(parquet_files))
-    intermediate_df = spark.read.parquet(*parquet_files)
+    intermediate_df = spark.read.option('basePath', intermediate_path).parquet(*parquet_files)
     curated_df = intermediate_df.select(
         F.col('country_name'),
         F.col('region'),
