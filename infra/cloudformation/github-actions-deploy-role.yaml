@@ -82,7 +82,6 @@ Resources:
                   - s3:PutBucketVersioning
                   - s3:PutBucketTagging
                   - s3:GetBucketTagging
-                  - s3:ListAllMyBuckets
                   - s3:PutEncryptionConfiguration
                   - s3:GetEncryptionConfiguration
                   - s3:PutBucketPublicAccessBlock

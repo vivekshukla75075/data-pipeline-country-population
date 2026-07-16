@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Resources to run a standalone Glue ETL job for testing (S3 bucket + IAM role)
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: ''
+    Description: Optional existing S3 bucket name to use. Leave empty to create one.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+Conditions:
+  UseProvidedBucket: !Not [ !Equals [ !Ref BucketName, '' ] ]
+
+Resources:
+  GlueTestBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !If [UseProvidedBucket, !Ref BucketName, !Sub 'data-pipeline-glue-test-${AWS::AccountId}-${Environment}']
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'data-pipeline-glue-test-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: GlueS3AndLogsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt GlueTestBucket.Arn
+
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${GlueTestBucket.Arn}/*'
+
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/*'
+
+Outputs:
+  GlueTestBucketName:
+    Description: Name of the S3 bucket to use for Glue test files
+    Value: !Ref GlueTestBucket
+
+  GlueJobRoleArn:
+    Description: IAM role ARN to use when creating the Glue job
+    Value: !GetAtt GlueJobRole.Arn
