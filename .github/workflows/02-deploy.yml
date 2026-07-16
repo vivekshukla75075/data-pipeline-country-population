@@ -229,30 +229,30 @@ jobs:
           echo "Inspecting ingestion Lambda configuration: $IngestionLambdaName"
           aws lambda get-function-configuration --function-name "$IngestionLambdaName" --region "$AWS_REGION" --output json || true
 
-          # Prefer the Lambda-configured key when available; otherwise fall back to a workflow configured value.
           INGESTION_KMS_ARN=$(aws lambda get-function-configuration --function-name "$IngestionLambdaName" --region "$AWS_REGION" --query 'KMSKeyArn' --output text 2>/dev/null || true)
           INGESTION_KMS_ARN=${INGESTION_KMS_ARN//[$'\r\n']/}
-          if [ -z "$INGESTION_KMS_ARN" ] || [ "$INGESTION_KMS_ARN" = "None" ]; then
-            INGESTION_KMS_ARN="${LAMBDA_KMS_KEY_ARN:-arn:aws:kms:us-east-1:778277577996:key/be41d7eb-e179-4416-af91-8985db05d80}"
-          fi
 
-          if [ -n "$INGESTION_KMS_ARN" ]; then
+          if [ -n "$INGESTION_KMS_ARN" ] && [ "$INGESTION_KMS_ARN" != "None" ]; then
             echo "Using KMS key for ingestion Lambda: $INGESTION_KMS_ARN"
-            # Extract key id from the ARN (last path segment)
             KEY_ID=$(echo "$INGESTION_KMS_ARN" | awk -F'/' '{print $NF}')
 
-            # Get role ARNs from CloudFormation outputs
-            INGESTION_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`IngestionLambdaRoleArn`].OutputValue | [0]' --output text)
-            NOTIFIER_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`NotificationLambdaRoleArn`].OutputValue | [0]' --output text)
+            if aws kms describe-key --key-id "$KEY_ID" --region "$AWS_REGION" >/dev/null 2>&1; then
+              echo "KMS key exists; updating key policy for $KEY_ID"
+              INGESTION_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`IngestionLambdaRoleArn`].OutputValue | [0]' --output text)
+              NOTIFIER_ROLE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].Outputs[?OutputKey==`NotificationLambdaRoleArn`].OutputValue | [0]' --output text)
 
-            echo "Modifying key policy for $KEY_ID to allow roles: $INGESTION_ROLE_ARN $NOTIFIER_ROLE_ARN"
-            export INGESTION_ROLE_ARN="$INGESTION_ROLE_ARN"
-            export NOTIFIER_ROLE_ARN="$NOTIFIER_ROLE_ARN"
-            aws kms get-key-policy --key-id "$KEY_ID" --policy-name default --query Policy --output text > /tmp/key_policy.json
-            python3 scripts/update_kms_policy.py
-            aws kms put-key-policy --key-id "$KEY_ID" --policy-name default --policy file:///tmp/key_policy_new.json
+              echo "Modifying key policy for $KEY_ID to allow roles: $INGESTION_ROLE_ARN $NOTIFIER_ROLE_ARN"
+              export INGESTION_ROLE_ARN="$INGESTION_ROLE_ARN"
+              export NOTIFIER_ROLE_ARN="$NOTIFIER_ROLE_ARN"
+              aws kms get-key-policy --key-id "$KEY_ID" --policy-name default --query Policy --output text > /tmp/key_policy.json
+              python3 scripts/update_kms_policy.py
+              aws kms put-key-policy --key-id "$KEY_ID" --policy-name default --policy file:///tmp/key_policy_new.json
+            else
+              echo "KMS key is not available in this account/region; clearing the Lambda's KMS association so environment variables are not encrypted"
+              aws lambda update-function-configuration --function-name "$IngestionLambdaName" --kms-key-arn "" --region "$AWS_REGION" || true
+            fi
           else
-            echo "No KMS key available for ingestion Lambda; skipping KMS policy update"
+            echo "No KMS key configured for ingestion Lambda; skipping KMS policy update"
           fi
 
       - name: Deploy Lambda functions and invoke permissions
