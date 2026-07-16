@@ -37,6 +37,7 @@ Resources:
                   - cloudformation:DescribeStacks
                   - cloudformation:DescribeStackEvents
                   - cloudformation:DescribeStackResources
+                  - cloudformation:ListStackResources
                   - cloudformation:ValidateTemplate
                   - cloudformation:GetTemplateSummary
                   - cloudformation:ListStacks

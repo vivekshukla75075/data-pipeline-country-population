@@ -39,6 +39,7 @@ jobs:
   deploy:
     name: Deploy Pipeline Infrastructure
     runs-on: ubuntu-latest
+    if: ${{ !(github.event_name == 'push' && github.actor == 'github-actions') }}
     environment:
       name: ${{ github.event.inputs.environment || 'dev' }}
 

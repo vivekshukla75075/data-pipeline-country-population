@@ -165,10 +165,26 @@ jobs:
           echo "Stack deletion initiated..."
           
           echo "Waiting for stack deletion to complete (this may take a few minutes)..."
+          # Run waiter and capture exit code so we can check final stack status
           aws cloudformation wait stack-delete-complete \
             --stack-name "$STACK_NAME" \
-            --region "$AWS_REGION" || true
-          
+            --region "$AWS_REGION"
+          WAIT_STATUS=$?
+
+          # If waiter failed (non-zero), inspect stack status and exit non-zero to mark workflow failure
+          if [ "$WAIT_STATUS" -ne 0 ]; then
+            echo "Stack deletion waiter returned non-zero ($WAIT_STATUS). Checking stack status..."
+          fi
+
+          if aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query 'Stacks[0].StackStatus' --output text)
+            echo "Stack status after delete attempt: $STATUS"
+            if [ "$STATUS" != "DELETE_COMPLETE" ]; then
+              echo "Stack deletion failed or is incomplete. Status: $STATUS"
+              exit 1
+            fi
+          fi
+
           echo "✓ Stack deletion completed"
 
       - name: Verify stack deletion
