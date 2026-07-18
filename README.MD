@@ -1,53 +1,42 @@
 # Country Population ETL Pipeline
 
-Production-ready ETL pipeline that ingests country population data from REST Countries API, validates it, transforms it, and makes it queryable via AWS Athena.
+This repository contains a minimal end-to-end data pipeline for ingesting country population data, validating it, transforming it, and publishing it to AWS storage for analytics.
 
-## Architecture
+## End-to-end flow
 
-- **Ingestion**: REST API to fetch country population data
-- **Validation**: Reads raw JSON from S3, validates records (population > 0), outputs parquet
-- **Transformation**: Reads validated parquet, flattens nested fields, outputs curated parquet partitioned by region
-- **Storage**: All data stored in S3 bucket `data-pipeline-country-population`
-- **Compute**: AWS Glue for serverless PySpark execution
+1. Local development
+   - Create and activate a Python virtual environment.
+   - Install dependencies: `pip install -r requirements.txt`
+   - Run the ingestion job locally: `python Ingestion/ingest_data.py`
+   - Run the local validation and transformation checks: `python scripts/local_validate_transform.py`
 
-## Project Structure.
+2. AWS deployment
+   - Configure AWS credentials and region.
+   - Deploy the core infrastructure from `infra/cloudformation/orchestration.yaml` or use the GitHub Actions workflow in `.github/workflows/02-deploy.yml`.
+   - Ensure IAM permissions are available for S3, Glue, Lambda, Step Functions, and CloudWatch.
+   - Trigger the pipeline through the deployed workflow or the AWS orchestration resources.
 
-```
-.
-├── config/
-│   ├── config.yml
-│   └── env/
-│       ├── dev.yml
-│       └── prod.yml
-├── infra/
-│   ├── s3_bucket.tf
-│   └── iam_role.tf
-├── scripts/
-│   ├── deploy_stack.ps1
-│   ├── ingest_data.py
-│   └── utils/
-│       ├── s3_helper.py
-│       └── validate_population.py
-├── data/
-│   ├── raw/
-│   └── processed/
-├── logs/
-└── README.md
-```
+3. Verification
+   - Check raw, validated, and curated outputs in S3.
+   - Review Glue and Step Functions logs in CloudWatch.
+   - Query the curated data using Athena once the AWS resources are available.
 
-## Configuration
+## Key folders
 
-- Defaults in `config/config.yml`. Environment variables override config values.
+- `Ingestion/` - local ingestion entry point
+- `Validation/` - validation logic
+- `Transformation/` - transformation logic
+- `lambda_deployment/` - AWS Lambda-based orchestration helpers
+- `infra/` - CloudFormation and Terraform deployment assets
+- `tests/` - unit tests
 
-## Deploy
-
-- Use `scripts/deploy_stack.ps1` (Windows PowerShell) to create the S3 bucket and IAM role:
+## Quick start
 
 ```powershell
-.\scripts\deploy_stack.ps1 -StackName pipeline-stack -BucketName my-bucket -Region us-east-1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python Ingestion/ingest_data.py
+python scripts/local_validate_transform.py
 ```
-
-## Notes
-
-- `utils/s3_helper.upload_to_s3` supports `SKIP_S3_UPLOAD` env var and `ASSUME_ROLE_ARN` for STS assume-role.
 
