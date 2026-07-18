@@ -43,6 +43,7 @@ Thumbs.db
 *.log
 response.json
 /tmp/
+.venv/
 
 # Terraform (not used)
 infra/terraform/.terraform/
